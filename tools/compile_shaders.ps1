@@ -38,25 +38,71 @@ $ok = 0; $fail = 0; $skip = 0
 
 Get-ChildItem -Path $ShaderDir -Filter '*.hlsl' | Sort-Object Name | ForEach-Object {
     $file = $_
-    # Skip injected passes (no 0x hash in filename) — Phase 3.
-    if (-not $hashRe.IsMatch($file.Name)) { $skip++; Write-Host "skip  $($file.Name) (no hash / injected pass)"; return }
+    # Hash-keyed replacement shaders (0x........ in filename): one .cso, entry 'main'.
+    if ($hashRe.IsMatch($file.Name)) {
+        $m = $profileRe.Match($file.Name)
+        if (-not $m) { $skip++; Write-Host "skip  $($file.Name) (no profile)"; return }
+        $profile = "$($m.Groups[1].Value)_$($m.Groups[2].Value)"
+        $csoName = $file.Name -replace '\.hlsl$','.cso'
+        $csoPath = Join-Path $OutDir $csoName
+        $fa = @('/T', $profile, '/E', 'main', '/O3', '/nologo',
+                '/I', $ShaderDir,
+                '/I', (Split-Path $ShaderDir -Parent),
+                '/Fo', $csoPath, $file.FullName)
+        & fxc @fa
+        if ($LASTEXITCODE -eq 0) { $ok++; Write-Host "ok    $($file.Name) -> compiled\$csoName" }
+        else { $fail++; Write-Host "FAIL  $($file.Name) (fxc exit $LASTEXITCODE)" -ForegroundColor Red }
+        return
+    }
 
-    $m = $profileRe.Match($file.Name)
-    if (-not $m) { $skip++; Write-Host "skip  $($file.Name) (no profile)"; return }
-    $profile = "$($m.Groups[1].Value)_$($m.Groups[2].Value)"
-
-    # Entry point is 'main' for all hash-keyed replacement shaders.
-    $csoName = $file.Name -replace '\.hlsl$','.cso'
-    $csoPath = Join-Path $OutDir $csoName
-
-    # /O3 for performance; /WX would break on warning (too strict for a port).
-    $args = @('/T', $profile, '/E', 'main', '/O3', '/nologo',
-              '/I', $ShaderDir,
-              '/I', (Split-Path $ShaderDir -Parent),  # shaders/ for ../Includes
-              '/Fo', $csoPath, $file.FullName)
-    & fxc @args
-    if ($LASTEXITCODE -eq 0) { $ok++; Write-Host "ok    $($file.Name) -> compiled\$csoName" }
-    else { $fail++; Write-Host "FAIL  $($file.Name) (fxc exit $LASTEXITCODE)" -ForegroundColor Red }
+    # Injected-pass shaders (no 0x hash). These compile to multiple .cso files,
+    # one per entry point + macro combination. The .cso stem encodes the entry
+    # point and macro so LumaPasses::Load can find each variant.
+    switch ($file.Name) {
+        'Luma_DXHR_XeGTAO.hlsl' {
+            # 4 CS variants: prefilter, main, denoise(FINAL_APPLY=0), denoise(=1)
+            $variants = @(
+                @{ Entry = 'prefilter_depths16x16_cs'; Stem = 'Luma_DXHR_XeGTAO_prefilter_depths16x16_cs'; Macros = @() },
+                @{ Entry = 'main_pass_cs'; Stem = 'Luma_DXHR_XeGTAO_main_pass_cs'; Macros = @() },
+                @{ Entry = 'denoise_pass_cs'; Stem = 'Luma_DXHR_XeGTAO_denoise_pass_cs_XE_GTAO_FINAL_APPLY_0'; Macros = @('/DXE_GTAO_FINAL_APPLY=0') },
+                @{ Entry = 'denoise_pass_cs'; Stem = 'Luma_DXHR_XeGTAO_denoise_pass_cs_XE_GTAO_FINAL_APPLY_1'; Macros = @('/DXE_GTAO_FINAL_APPLY=1') }
+            )
+            foreach ($v in $variants) {
+                $csoPath = Join-Path $OutDir "$($v.Stem).cso"
+                $fa = @('/T', 'cs_5_0', '/E', $v.Entry, '/O3', '/nologo',
+                        '/I', $ShaderDir,
+                        '/I', (Split-Path $ShaderDir -Parent)) + $v.Macros + @('/Fo', $csoPath, $file.FullName)
+                & fxc @fa
+                if ($LASTEXITCODE -eq 0) { $ok++; Write-Host "ok    $($file.Name) [$($v.Entry)/$($v.Stem)] -> compiled\$($v.Stem).cso" }
+                else { $fail++; Write-Host "FAIL  $($file.Name) [$($v.Entry)/$($v.Stem)] (fxc exit $LASTEXITCODE)" -ForegroundColor Red }
+            }
+            return
+        }
+        'Luma_SMAA_Linearize.hlsl' {
+            $csoPath = Join-Path $OutDir 'Luma_SMAA_Linearize.cso'
+            $fa = @('/T', 'cs_5_0', '/E', 'main', '/O3', '/nologo',
+                    '/I', $ShaderDir, '/I', (Split-Path $ShaderDir -Parent),
+                    '/Fo', $csoPath, $file.FullName)
+            & fxc @fa
+            if ($LASTEXITCODE -eq 0) { $ok++; Write-Host "ok    $($file.Name) -> compiled\Luma_SMAA_Linearize.cso" }
+            else { $fail++; Write-Host "FAIL  $($file.Name) (fxc exit $LASTEXITCODE)" -ForegroundColor Red }
+            return
+        }
+        'Luma_ModulateLighting.hlsl' {
+            $csoPath = Join-Path $OutDir 'Luma_ModulateLighting.cso'
+            $fa = @('/T', 'ps_5_0', '/E', 'main', '/O3', '/nologo',
+                    '/I', $ShaderDir, '/I', (Split-Path $ShaderDir -Parent),
+                    '/Fo', $csoPath, $file.FullName)
+            & fxc @fa
+            if ($LASTEXITCODE -eq 0) { $ok++; Write-Host "ok    $($file.Name) -> compiled\Luma_ModulateLighting.cso" }
+            else { $fail++; Write-Host "FAIL  $($file.Name) (fxc exit $LASTEXITCODE)" -ForegroundColor Red }
+            return
+        }
+        default {
+            # Luma_SMAA_impl.hlsl is an include library, not directly compiled.
+            $skip++; Write-Host "skip  $($file.Name) (include library)"; return
+        }
+    }
 }
 
 Write-Host ""

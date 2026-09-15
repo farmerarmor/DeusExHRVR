@@ -6,6 +6,7 @@
 #include "EngineShaderTrace.h"
 #include "EffectShader.h"
 #include "ShaderSwap.h"
+#include "LumaPasses.h"
 #include "ScreenMode.h"
 #include <windows.h>
 #include <MinHook.h>
@@ -567,6 +568,7 @@ void* __fastcall VideoCreateHook(void* self,void*,void* heap) {
 void __fastcall VideoDestroyHook(void* self,void*) {screenMode.Remove(self);originalVideoDestroy(self);}
 EffectShader effectShaders;
 ShaderSwap shaderSwap; // Luma fix port: hash-keyed native shader swap (sidesteps ReShade)
+LumaPasses lumaPasses; // Luma fix port: per-eye injected passes (XeGTAO/SMAA/ModulateLighting)
 uint64_t instanceCorrections{};
 void __fastcall RenderStateHook(void* self,void*) {
     auto state=static_cast<unsigned char*>(self);
@@ -624,6 +626,13 @@ void __fastcall RenderStateHook(void* self,void*) {
     // disabled or when no replacement exists for this hash.
     if(lumaHash && shaderSwap.SubstitutionEnabled())
         shaderSwap.TrySubstitutePS(lumaHash);
+    // Luma port Phase 3: injected passes (XeGTAO/SMAA/ModulateLighting).
+    // Evaluate triggers against the bound PS hash; OnDraw is a no-op unless a
+    // trigger matches and the pass is enabled. Per-eye is automatic: the hook
+    // fires per draw, and the engine renders each eye separately.
+    if(lumaPasses.Loaded())
+        lumaPasses.OnDraw(static_cast<uint32_t>(frameId.load()), lumaHash,
+                          state[0x5ea]?0:1);
     if(effectsCapture)shaderTrace.Record(state,drawing.active);
     // Upload copied the corrected constants. Restore the engine's centre-view
     // copy so subsequent draws/eyes cannot accumulate the eye transform.
@@ -1118,6 +1127,10 @@ void Install() {
         // it live regardless of this starting state.
         bool sub=GetPrivateProfileIntW(L"Luma",L"SubstituteShaders",0,config)!=0;
         shaderSwap.SetSubstitutionEnabled(sub);
+        // Phase 3: injected-pass enables. All default off until tested.
+        lumaPasses.SetXeGTAOEnabled(GetPrivateProfileIntW(L"Luma",L"XeGTAOEnable",0,config)!=0);
+        lumaPasses.SetSMAAEnabled(GetPrivateProfileIntW(L"Luma",L"SMAAEnable",0,config)!=0);
+        lumaPasses.SetModulateLightingEnabled(GetPrivateProfileIntW(L"Luma",L"ModulateLightingEnable",0,config)!=0);
     }
     FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")) {
         fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d levelMenu=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,levelMenu,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0]);fclose(f);
@@ -1172,6 +1185,11 @@ Transport::RenderInfo OnPresent(uint64_t frame,bool capture) {
             auto ss=shaderSwap.GetStats();
             FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")){fprintf(f,"shaderSwap notes=%llu matches=%llu unique=%llu substitutions=%llu enabled=%d frame=%llu\n",ss.notes,ss.matches,ss.uniqueMatches,ss.substitutions,int(shaderSwap.SubstitutionEnabled()),frame);fclose(f);}
         }
+        // Phase 3: injected-pass counts.
+        if(lumaPasses.Loaded()) {
+            auto ps=lumaPasses.GetStats();
+            FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")){fprintf(f,"lumaPasses xegtao=%llu smaa=%llu modulate=%llu enabled=xg%d/smaa%d/mod%d frame=%llu\n",ps.xegtaoRuns,ps.smaaRuns,ps.modulateRuns,int(lumaPasses.XeGTAOEnabled()),int(lumaPasses.SMAAEnabled()),int(lumaPasses.ModulateLightingEnabled()),frame);fclose(f);}
+        }
     }
     bool f6=(GetAsyncKeyState(VK_F6)&0x8000)!=0,f9=(GetAsyncKeyState(VK_F9)&0x8000)!=0;
     if(capture) {
@@ -1213,6 +1231,27 @@ bool SnapTurnView(float& yaw) {
     yaw=std::atan2(current.originalWorld.m[9],current.originalWorld.m[8]);
     return std::isfinite(yaw);
 }
-void SetShaderSwapDevice(ID3D11Device* device){shaderSwap.SetDevice(device);}
+
+void SetShaderSwapDevice(ID3D11Device* device){
+    shaderSwap.SetDevice(device);
+    // Phase 3: also init the injected-pass subsystem now that the device is
+    // available. Loads the injected-pass .cso blobs from the same compiled/
+    // dir the shader swap uses. Missing blobs leave the corresponding pass
+    // disabled; the first call to OnDraw is a no-op until enabled via ini.
+    if(device) {
+        // The compiled/ dir is <game>/DeusExHRVR/shaders/dxhr/compiled/, which
+        // is shaderSwap's shaderDir + "compiled". We reconstruct it from the
+        // exe path (same logic NativeTransport uses for the host exe).
+        wchar_t module[MAX_PATH]{};HMODULE self{};
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,reinterpret_cast<LPCWSTR>(&SetShaderSwapDevice),&self);
+        GetModuleFileNameW(self,module,MAX_PATH);
+        wchar_t* slash=wcsrchr(module,L'\\');
+        if(slash) {
+            slash[1]=0;
+            std::filesystem::path compiled=std::filesystem::path(module)/L"DeusExHRVR"/L"shaders"/L"dxhr"/L"compiled";
+            lumaPasses.Load(compiled, device);
+        }
+    }
+}
 bool ToggleShaderSubstitution(){bool on=!shaderSwap.SubstitutionEnabled();shaderSwap.SetSubstitutionEnabled(on);return on;}
 }

@@ -115,3 +115,18 @@ Enable=1
 ; logged to DeusExHRVR-shaderswap.log and counted in the F8 camera log as
 ; 'substitutions='. Restart the game after changing this ini value.
 SubstituteShaders=0
+
+; Phase 3 — injected render passes (per-eye, sidesteps ReShade). All default
+; off; enable individually after confirming the trigger hashes match. Counts
+; appear in the F8 camera log as 'lumaPasses xegtao=N smaa=N modulate=N'.
+; Restart the game after changing these.
+; XeGTAO: Intel XeGTAO ambient occlusion, replacing the game's SSAO. Runs 4
+; compute dispatches per eye when the engine's SSAO Copy draw fires. Requires
+; the XeGTAO .cso blobs in DeusExHRVR/shaders/dxhr/compiled/.
+XeGTAOEnable=0
+; SMAA: subpixel morphological AA replacing the game's MLAA. Phase 3e (stub —
+; trigger detection only; full draw passes land in a later commit).
+SMAAEnable=0
+; ModulateLighting: custom PS pass on the lighting buffer before materials
+; composite. Phase 3f (stub).
+ModulateLightingEnable=0
