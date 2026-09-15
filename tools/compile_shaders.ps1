@@ -13,15 +13,17 @@
 # Requires Windows SDK fxc on PATH (set by the MSVC dev environment / CI).
 [CmdletBinding()]
 param(
-    # Resolve paths from $PSScriptRoot (the tools/ dir) so the script works
-    # regardless of the CI runner's working directory. Resolve-Path would fail
-    # if CWD != repo root; Split-Path + Join-Path just construct the string.
-    [string]$RepoRoot  = (Split-Path $PSScriptRoot -Parent),
     [string]$ShaderDir,
     [string]$OutDir
 )
-if (-not $ShaderDir) { $ShaderDir = Join-Path $RepoRoot "shaders\dxhr" }
-if (-not $OutDir)    { $OutDir    = Join-Path $ShaderDir "compiled" }
+# Resolve paths from $PSScriptRoot (the tools/ dir) in the script body, not
+# in param defaults: $PSScriptRoot can be empty during param evaluation in
+# some PowerShell hosting contexts (e.g. pwsh -File in CI).
+if (-not $ShaderDir) {
+    $RepoRoot = Split-Path $PSScriptRoot -Parent
+    $ShaderDir = Join-Path $RepoRoot "shaders\dxhr"
+}
+if (-not $OutDir) { $OutDir = Join-Path $ShaderDir "compiled" }
 
 $ErrorActionPreference = 'Stop'
 if (-not (Get-Command fxc -ErrorAction SilentlyContinue)) {
