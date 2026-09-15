@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list> // MSVC: range-based-for over braced-init-lists
 #include <vector>
 
 // ReShade-compatible shader bytecode hashing.

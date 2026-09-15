@@ -205,7 +205,7 @@ ID3D11ComputeShader* ShaderSwap::GetReplacementCS(uint32_t hash, ID3D11Device* d
 
 bool ShaderSwap::Active() const { return loaded; }
 
-ShaderSwap::Stats ShaderSwap::Stats() const {
+ShaderSwap::Stats ShaderSwap::GetStats() const {
     // Render-thread only (OnPresent capture path); no lock needed.
     return {noteCount, matchCount, matchedHashes.size()};
 }

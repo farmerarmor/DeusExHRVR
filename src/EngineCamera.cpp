@@ -1156,7 +1156,7 @@ Transport::RenderInfo OnPresent(uint64_t frame,bool capture) {
         // Luma port: fold shader-swap match stats into the capture log so the
         // dry run can be confirmed without a separate file read.
         if(shaderSwap.Active()) {
-            auto ss=shaderSwap.Stats();
+            auto ss=shaderSwap.GetStats();
             FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")){fprintf(f,"shaderSwap notes=%llu matches=%llu unique=%llu frame=%llu\n",ss.notes,ss.matches,ss.uniqueMatches,frame);fclose(f);}
         }
     }

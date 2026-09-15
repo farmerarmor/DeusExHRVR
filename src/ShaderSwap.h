@@ -72,7 +72,9 @@ public:
 
     // Counts for the camera log line.
     struct Stats { uint64_t notes{}; uint64_t matches{}; uint64_t uniqueMatches{}; };
-    Stats Stats() const;
+    // Named GetStats (not Stats) to avoid a MSVC name-lookup collision between
+    // the nested Stats type and a member function of the same name.
+    Stats GetStats() const;
 
 private:
     mutable std::mutex m;
