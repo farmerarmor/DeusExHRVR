@@ -9,6 +9,12 @@
 #include <unordered_set>
 #include <vector>
 
+// Forward decl — LumaSettingsCB::Manager is defined in LumaSettingsCB.h.
+// ShaderSwap binds it at b13 before substituting a replacement shader, so the
+// replacement (which reads LumaSettings.GameSettings.* for intensity
+// multipliers etc.) sees correct values.
+namespace LumaSettingsCB { class Manager; }
+
 // Native Luma-shader swap for DXHRVR.
 //
 // Luma fixes DXHR by replacing the game's shaders with hand-authored HLSL
@@ -65,6 +71,11 @@ public:
     // if no entry exists or compilation failed. Cached per (stage,hash).
     ID3D11PixelShader* GetReplacementPS(uint32_t hash, ID3D11Device* device);
     ID3D11ComputeShader* GetReplacementCS(uint32_t hash, ID3D11Device* device);
+
+    // Set the LumaSettings cbuffer manager. When non-null, TrySubstitutePS
+    // binds it at b13 before PSSetShader so replacement shaders see correct
+    // LumaSettings values.
+    void SetLumaSettingsCB(LumaSettingsCB::Manager* m) { lumaSettingsCB = m; }
 
     // Capture the D3D11 device + its immediate context for substitution.
     // Called once from NativeTransport::Producer::Init (the point where the
@@ -124,6 +135,8 @@ private:
     bool substituteEnabled{false};
     Microsoft::WRL::ComPtr<ID3D11Device> device;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    // Optional LumaSettings cbuffer manager (set via SetLumaSettingsCB).
+    LumaSettingsCB::Manager* lumaSettingsCB{};
 
     void Log(const char* fmt, ...) const;
     static Stage ParseStage(const std::string& profile);

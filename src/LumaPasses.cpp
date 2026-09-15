@@ -1,6 +1,7 @@
 #include "LumaPasses.h"
 #include "ShaderHash.h"
 #include "DrawStateStack.h"
+#include "LumaSettingsCB.h"
 #include <cstdio>
 #include <cstdarg>
 #include <fstream>
@@ -296,6 +297,10 @@ bool LumaPasses::RunXeGTAO(uint32_t frame, unsigned eye,
                            ID3D11Buffer* sceneCB) {
     if (!csXeGTAOPrefilter || !csXeGTAOMain || !csXeGTAODenoise1 || !csXeGTAODenoise2)
         return false;
+    // Bind LumaSettings at b13 (CS stage) so XeGTAO shaders that read
+    // LumaSettings (e.g. viewport size) see correct values.
+    if (lumaSettingsCB)
+        lumaSettingsCB->BindCS(context.Get());
 
     // Resolve output dimensions from the normal RT (the engine's SSAO output
     // size = per-eye resolution).
@@ -445,6 +450,10 @@ bool LumaPasses::RunSMAA(uint32_t, unsigned,
 bool LumaPasses::RunModulateLighting(uint32_t frame, unsigned eye,
                                      ID3D11RenderTargetView* lightingRtv) {
     if (!psModulateLighting || !vsCopy || !lightingRtv) return false;
+    // Bind LumaSettings at b13 (PS stage) — ModulateLighting reads
+    // LumaSettings.GameSettings.LightingColor.
+    if (lumaSettingsCB)
+        lumaSettingsCB->Bind(context.Get());
     // Faithful port of Luma line 850-862:
     //   DrawStateStack<FullGraphics> to cache/restore all pipeline state
     //   (because setting the lighting RTV may unbind the same resource bound

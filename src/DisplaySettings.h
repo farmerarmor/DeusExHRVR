@@ -13,4 +13,7 @@ inline void Name(wchar_t (&name)[96],DWORD pid) {swprintf_s(name,L"Local\\DeusEx
 // x86 engine hooks, installed outside DllMain before render-context creation.
 void Install();
 bool Active();
+// Returns the cached headset settings (width/height/refresh). Only valid
+// when Active() returns true.
+Settings GetSettings();
 }

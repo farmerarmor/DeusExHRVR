@@ -1,5 +1,6 @@
 #include "ShaderSwap.h"
 #include "ShaderHash.h"
+#include "LumaSettingsCB.h"
 #include <cstdio>
 #include <cstdarg>
 #include <fstream>
@@ -230,6 +231,12 @@ bool ShaderSwap::TrySubstitutePS(uint32_t hash) {
     // same as context). A null device means SetDevice hasn't run yet.
     ID3D11PixelShader* replacement = device ? GetReplacementPS(hash, device.Get()) : nullptr;
     if (!replacement) return false;
+    // Bind LumaSettings at b13 before PSSetShader so the replacement shader
+    // (which reads LumaSettings.GameSettings.* for intensity multipliers etc.)
+    // sees correct values. The engine's next PSSetConstantBuffers will
+    // naturally overwrite b13 on subsequent non-Luma draws.
+    if (lumaSettingsCB)
+        lumaSettingsCB->Bind(context.Get());
     context->PSSetShader(replacement, nullptr, 0);
     ++substitutionCount;
     bool first = substitutedHashes.insert(hash).second;

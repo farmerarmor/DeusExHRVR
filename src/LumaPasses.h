@@ -8,6 +8,9 @@
 #include <unordered_set>
 #include <vector>
 
+// Forward decl — LumaSettingsCB::Manager is defined in LumaSettingsCB.h.
+namespace LumaSettingsCB { class Manager; }
+
 // Per-eye injected render passes ported from Luma's ReShade-addon scheduling.
 //
 // Phase 2 swapped shaders in place (drop-in replacements). Phase 3 adds passes
@@ -56,6 +59,11 @@ public:
     bool SMAAEnabled() const { return smaaEnabled; }
     bool ModulateLightingEnabled() const { return modulateEnabled; }
 
+    // Set the LumaSettings cbuffer manager. When non-null, injected passes
+    // bind it at b13 before running (CS bind for XeGTAO, PS bind for
+    // ModulateLighting/SMAA).
+    void SetLumaSettingsCB(LumaSettingsCB::Manager* m) { lumaSettingsCB = m; }
+
     // Trigger evaluation, called from RenderStateHook with the bound PS hash.
     // Returns true if a pass ran. Uses the cached device/context from Load.
     // `eye` is state[0x5ea]?0:1 for logging.
@@ -87,6 +95,8 @@ private:
     // Cached engine device + immediate context (render-thread only).
     Microsoft::WRL::ComPtr<ID3D11Device> device;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    // Optional LumaSettings cbuffer manager (set via SetLumaSettingsCB).
+    LumaSettingsCB::Manager* lumaSettingsCB{};
 
     // --- Per-frame scheduling state, mirroring Luma's GameDeviceData ---
     // has_found_lighting_buffer: set when the Lighting PS first runs and we

@@ -130,3 +130,14 @@ SMAAEnable=0
 ; ModulateLighting: custom PS pass on the lighting buffer before materials
 ; composite. Phase 3f (stub).
 ModulateLightingEnable=0
+
+; LumaSettings cbuffer values. These are passed to Luma's replacement + injected
+; shaders at b13. Defaults match Luma's DXHR "not vanilla like" tuned values
+; (main.cpp lines 1589-1599). Override to taste; restart to apply.
+BloomIntensity=0.8
+FogIntensity=0.0
+ColorGradingIntensity=1.0
+DesaturationIntensity=0.333
+AmbientLightingIntensity=0.8
+EmissiveIntensity=0.667
+HDRBoostIntensity=1.0

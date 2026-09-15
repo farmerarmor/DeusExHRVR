@@ -78,4 +78,5 @@ void InstallOnce() {
 }
 void Install(){std::call_once(installOnce,InstallOnce);}
 bool Active(){return Valid(settings);}
+Settings GetSettings(){return settings;}
 }
