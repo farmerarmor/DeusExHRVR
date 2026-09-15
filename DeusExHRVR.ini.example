@@ -103,3 +103,11 @@ SnapTurnPauseMs=60
 [Buttons]
 
 [ScreenButtons]
+[Luma]
+; Native Luma-shader port (sidesteps ReShade). Loads a hash-keyed shader
+; replacement table from DeusExHRVR/shaders/dxhr/table.csv. Set to 0 to
+; disable the whole subsystem; a missing or empty table is harmless.
+; Phase 1 (current): instrumentation only — matches are logged to
+; DeusExHRVR-shaderswap.log and counted in the F8 camera log. No shaders are
+; replaced yet. Restart the game after changing this.
+Enable=1

@@ -1,0 +1,65 @@
+name: build
+
+# Compile gate for the Luma-port branch.
+#
+# This sandbox cannot build a Windows D3D11 project (no MSVC, no Windows SDK,
+# no fxc), so GitHub Actions is the build path. The workflow:
+#   1. Builds the 32-bit proxy DLLs (atidxx32, d3d11, atiadlxy) + NativeTransport
+#   2. Builds the 64-bit OpenXR host (DeusExHRVRHost) + probes
+#   3. Compiles Luma's DXHR replacement shaders to .cso with fxc
+#   4. Regenerates shaders/dxhr/table.csv
+# A green run means the C++ (incl. the ShaderSwap port) compiles on MSVC and
+# every replacement shader compiles with fxc. Runtime/in-headset validation
+# still happens on a Windows PC.
+
+on:
+  push:
+    branches: [main, luma-port]
+  pull_request:
+    branches: [main, luma-port]
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+
+      - name: Configure CMake (x86, proxy DLLs)
+        run: |
+          cmake -S . -B build-x86 -A Win32 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-x86 --config Release --target atidxx32 d3d11_proxy atiadlxy
+
+      - name: Configure CMake (x64, OpenXR host)
+        run: |
+          cmake -S . -B build-x64 -A x64 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-x64 --config Release --target DeusExHRVRHost
+
+      - name: Set up Python (for table generation)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Regenerate shader swap table
+        run: python tools/gen_shader_table.py
+
+      - name: Compile Luma replacement shaders (fxc)
+        run: powershell -ExecutionPolicy Bypass -File tools/compile_shaders.ps1
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeusExHRVR-luma-port
+          path: |
+            build-x86/bin/Release/*.dll
+            build-x86/bin/Release/*.lib
+            build-x64/bin/Release/*.exe
+            shaders/dxhr/table.csv
+            shaders/dxhr/compiled/*.cso
+          if-no-files-found: warn

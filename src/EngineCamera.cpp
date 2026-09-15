@@ -5,6 +5,7 @@
 #include "SceneCache.h"
 #include "EngineShaderTrace.h"
 #include "EffectShader.h"
+#include "ShaderSwap.h"
 #include "ScreenMode.h"
 #include <windows.h>
 #include <MinHook.h>
@@ -565,11 +566,19 @@ void* __fastcall VideoCreateHook(void* self,void*,void* heap) {
 }
 void __fastcall VideoDestroyHook(void* self,void*) {screenMode.Remove(self);originalVideoDestroy(self);}
 EffectShader effectShaders;
+ShaderSwap shaderSwap; // Luma fix port: hash-keyed native shader swap (sidesteps ReShade)
 uint64_t instanceCorrections{};
 void __fastcall RenderStateHook(void* self,void*) {
     auto state=static_cast<unsigned char*>(self);
     float* instance{};CameraMath::Matrix saved;
     auto shader=effectShaders.Identify(*reinterpret_cast<uintptr_t*>(state+0x198));
+    // Luma port: identify the bound pixel shader in ReShade's hash space so
+    // the swap table can report (and later replace) Luma-targeted passes.
+    // Phase 1 is instrumentation only; no substitution is performed here.
+    if(shaderSwap.Active())
+        shaderSwap.NoteBound(static_cast<uint32_t>(frameId.load()),
+                             ShaderSwap::Stage::Pixel,
+                             *reinterpret_cast<uintptr_t*>(state+0x198));
     float* skyConstants{};CameraMath::Matrix savedSky;
     // Use the native sky-layer marker, shared by sky materials across levels.
     // Verified in this executable: model draws select +5a5 from depthLayer;
@@ -1086,6 +1095,17 @@ void Install() {
     GetPrivateProfileStringW(L"VR",L"ControllerMuzzleForwardMetres",L"0.25",scaleText,32,config);
     float muzzleForward=static_cast<float>(_wtof(scaleText));
     if(std::isfinite(muzzleForward) && muzzleForward>=0 && muzzleForward<=1)controllerMuzzleForward=muzzleForward;
+    // Luma port: load the native shader-swap table from beside the companion.
+    // Gated by [Luma] Enable (default on) so the feature is opt-out. The
+    // table lives at <game>/DeusExHRVR/shaders/dxhr/table.csv; a missing or
+    // empty table leaves the swap inactive and NoteBound is a no-op.
+    bool lumaEnable=GetPrivateProfileIntW(L"Luma",L"Enable",1,config)!=0;
+    if(lumaEnable) {
+        // config holds the absolute path to DeusExHRVR.ini in the game folder;
+        // its directory is the game root the shader table is relative to.
+        std::filesystem::path configPath=config;
+        shaderSwap.Load(configPath.parent_path());
+    }
     FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")) {
         fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d levelMenu=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,levelMenu,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0]);fclose(f);
     }
@@ -1133,6 +1153,12 @@ Transport::RenderInfo OnPresent(uint64_t frame,bool capture) {
             fclose(motion);
         }
         FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")){fprintf(f,"HUD plane draws=%llu matrices=%llu frame=%llu trackingReadContentions=%llu rejectedSamples=%llu\n",hudDraws,hudMatrices,frame,trackingReader.reused,trackingReader.rejected);fclose(f);}
+        // Luma port: fold shader-swap match stats into the capture log so the
+        // dry run can be confirmed without a separate file read.
+        if(shaderSwap.Active()) {
+            auto ss=shaderSwap.Stats();
+            FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")){fprintf(f,"shaderSwap notes=%llu matches=%llu unique=%llu frame=%llu\n",ss.notes,ss.matches,ss.uniqueMatches,frame);fclose(f);}
+        }
     }
     bool f6=(GetAsyncKeyState(VK_F6)&0x8000)!=0,f9=(GetAsyncKeyState(VK_F9)&0x8000)!=0;
     if(capture) {
