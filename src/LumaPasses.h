@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // Per-eye injected render passes ported from Luma's ReShade-addon scheduling.
@@ -70,6 +71,14 @@ public:
     };
     Stats GetStats() const { return stats; }
 
+    // Per-frame reset: call at the start of each engine frame (from OnPresent)
+    // to clear the one-shot-per-frame guards and the GameDeviceData-style
+    // scheduling flags, exactly like Luma resets its game_device_data on
+    // frame boundary. The engine renders both eyes within one frame, so the
+    // flags cover both eyes; per-eye correctness comes from the hook firing
+    // separately per eye's draws, not from per-eye flags here.
+    void OnFrameStart();
+
 private:
     bool loaded{false};
     bool xegtaoEnabled{false};
@@ -78,6 +87,30 @@ private:
     // Cached engine device + immediate context (render-thread only).
     Microsoft::WRL::ComPtr<ID3D11Device> device;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+
+    // --- Per-frame scheduling state, mirroring Luma's GameDeviceData ---
+    // has_found_lighting_buffer: set when the Lighting PS first runs and we
+    //   capture the bound RTV into lighting_buffer_rtv (Luma line 575-581).
+    bool hasFoundLightingBuffer{false};
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> lightingBufferRtv;
+    // has_drawn_ssao: set when the SSAOGeneration PS runs (Luma line 683).
+    bool hasDrawnSSAO{false};
+    // has_drawn_xegtao: set when our XeGTAO chain completes for this frame.
+    bool hasDrawnXeGTAO{false};
+    // has_drawn_main_post_processing: set when BloomComposition runs (Luma
+    //   line 673) — gates ModulateLighting to run before post starts.
+    bool hasDrawnMainPostProcessing{false};
+    // has_modulated_lighting: set when ModulateLighting runs (Luma line 858).
+    bool hasModulatedLighting{false};
+    // Cached swapchain RTV (Luma caches it on the first SupportedAA draw,
+    //   line 594-595). Used to detect "first material draw on swapchain".
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> swapchainRtv;
+    bool hasSwapchainRtv{false};
+    // Per-frame re-entrancy guards for the trigger draws (so SMAA's MLAA-mask
+    //   trigger fires once per frame even though the draw may repeat).
+    uint64_t lastFrameXeGTAO{};
+    uint64_t lastFrameModulate{};
+    uint64_t lastFrameSMAA{};
 
     // Injected-pass shaders. Held as raw ComPtrs because they're built once
     // and bound directly (no per-hash lookup, unlike ShaderSwap).
@@ -94,6 +127,23 @@ private:
     Microsoft::WRL::ComPtr<ID3D11PixelShader> psSMAABlendingWeight;
     Microsoft::WRL::ComPtr<ID3D11VertexShader> vsSMAANeighborhoodBlending;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> psSMAANeighborhoodBlending;
+    // Copy VS: Luma's fullscreen-triangle vertex shader (SV_VertexID-based).
+    // Used by DrawCustomPixelShader for ModulateLighting (and later SMAA).
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> vsCopy;
+    // Cached point sampler for injected passes (Luma's device_data.sampler_state_point).
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> samplerPoint;
+    // Per-pass cached SRV/RTV/texture for DrawCustomPixelShaderPass (mirrors
+    // Luma's CustomPixelShaderPassData). Re-created when the target RTV
+    // resource changes; reused across frames for the same target.
+    struct CustomPassData {
+        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> originalRtv;
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> texture2d;     // SRV copy of the RT
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;  // SRV on texture2d
+        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv;    // RTV on texture2d (used if original isn't an RTV)
+        UINT width{};
+        UINT height{};
+    };
+    CustomPassData modulatePassData;
 
     // Per-frame re-entrancy guard: each injected pass runs at most once per
     // engine frame per eye. Reset in OnPresent. The engine fires the trigger
@@ -132,4 +182,27 @@ private:
     // ModulateLighting: one custom PS pass on the lighting buffer RT. Phase 3f.
     bool RunModulateLighting(uint32_t frame, unsigned eye,
                              ID3D11RenderTargetView* lightingRtv);
+
+    // Faithful port of Luma's DrawCustomPixelShader (Source/Core/utils/draw.hpp).
+    // Binds a fullscreen TRIANGLESTRIP draw (Copy VS + given PS), sources from
+    // `sourceSrv` at t0, renders into `targetRtv`, sets a full viewport, no
+    // scissor, null IA input layout, null rasterizer state, null DSV, then
+    // Draw(4, 0). The caller is responsible for caching/restoring surrounding
+    // state via DrawStateStack.
+    void DrawCustomPixelShader(ID3D11DeviceContext* ctx,
+                               ID3D11DepthStencilState* dss, ID3D11BlendState* blend,
+                               ID3D11SamplerState* sampler,
+                               ID3D11VertexShader* vs, ID3D11PixelShader* ps,
+                               ID3D11ShaderResourceView* sourceSrv,
+                               ID3D11RenderTargetView* targetRtv,
+                               UINT width, UINT height, bool alpha = true);
+
+    // Faithful port of Luma's DrawCustomPixelShaderPass. Copies the resource
+    // behind `rtv` into a temp SRV texture (so the same texture can be both
+    // SRV and RTV), then calls DrawCustomPixelShader with that SRV + the
+    // original RTV + the Copy VS + `ps`. Caches the temp texture per target
+    // (re-created only when the target resource changes). `data` holds the
+    // cache. This is the pattern Luma uses for ModulateLighting.
+    void DrawCustomPixelShaderPass(ID3D11RenderTargetView* rtv,
+                                   ID3D11PixelShader* ps, CustomPassData& data);
 };

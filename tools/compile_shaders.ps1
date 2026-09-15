@@ -98,6 +98,28 @@ Get-ChildItem -Path $ShaderDir -Filter '*.hlsl' | Sort-Object Name | ForEach-Obj
             else { $fail++; Write-Host "FAIL  $($file.Name) (fxc exit $LASTEXITCODE)" -ForegroundColor Red }
             return
         }
+        'Luma_Copy_VS.hlsl' {
+            # Fullscreen-triangle VS used by DrawCustomPixelShader (ModulateLighting + SMAA).
+            $csoPath = Join-Path $OutDir 'Luma_Copy_VS.cso'
+            $fa = @('/T', 'vs_5_0', '/E', 'main', '/O3', '/nologo',
+                    '/I', $ShaderDir, '/I', (Split-Path $ShaderDir -Parent),
+                    '/Fo', $csoPath, $file.FullName)
+            & fxc @fa
+            if ($LASTEXITCODE -eq 0) { $ok++; Write-Host "ok    $($file.Name) -> compiled\Luma_Copy_VS.cso" }
+            else { $fail++; Write-Host "FAIL  $($file.Name) (fxc exit $LASTEXITCODE)" -ForegroundColor Red }
+            return
+        }
+        'Luma_Copy_PS.hlsl' {
+            # Optional copy PS (not used by current passes, but compile to verify syntax).
+            $csoPath = Join-Path $OutDir 'Luma_Copy_PS.cso'
+            $fa = @('/T', 'ps_5_0', '/E', 'main', '/O3', '/nologo',
+                    '/I', $ShaderDir, '/I', (Split-Path $ShaderDir -Parent),
+                    '/Fo', $csoPath, $file.FullName)
+            & fxc @fa
+            if ($LASTEXITCODE -eq 0) { $ok++; Write-Host "ok    $($file.Name) -> compiled\Luma_Copy_PS.cso" }
+            else { $fail++; Write-Host "FAIL  $($file.Name) (fxc exit $LASTEXITCODE)" -ForegroundColor Red }
+            return
+        }
         default {
             # Luma_SMAA_impl.hlsl is an include library, not directly compiled.
             $skip++; Write-Host "skip  $($file.Name) (include library)"; return

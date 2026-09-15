@@ -1140,6 +1140,9 @@ void Install() {
 Transport::RenderInfo OnPresent(uint64_t frame,bool capture) {
     static std::once_flag once;std::call_once(once,Install);
     frameId=frame;
+    // Luma port: reset per-frame scheduling flags at frame start (mirrors
+    // Luma resetting game_device_data on frame boundary).
+    if(lumaPasses.Loaded()) lumaPasses.OnFrameStart();
     // Detailed camera dumps perform synchronous file IO. Never schedule them
     // periodically on the render thread; F8 is the explicit diagnostic request.
     budget=capture?32:0;
