@@ -145,13 +145,6 @@ private:
     };
     CustomPassData modulatePassData;
 
-    // Per-frame re-entrancy guard: each injected pass runs at most once per
-    // engine frame per eye. Reset in OnPresent. The engine fires the trigger
-    // draw many times during a frame's post-processing; we only want the first.
-    uint64_t lastFrameXeGTAO{};
-    uint64_t lastFrameModulate{};
-    uint64_t lastFrameSMAA{};
-
     Stats stats;
 
     void Log(const char* fmt, ...) const;

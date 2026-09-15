@@ -1,5 +1,6 @@
 #pragma once
 #include <d3d11.h>
+#include <d3d11_1.h> // ID3D11DeviceContext1 for PSGetConstantBuffers1 / VSGetConstantBuffers1
 #include <wrl/client.h>
 #include <memory>
 #include <algorithm>
