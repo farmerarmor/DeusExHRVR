@@ -628,7 +628,8 @@ void __fastcall RenderStateHook(void* self,void*) {
     // Runs per-draw on the render thread; TrySubstitutePS is a no-op when
     // disabled or when no replacement exists for this hash.
     if(lumaHash && shaderSwap.SubstitutionEnabled())
-        shaderSwap.TrySubstitutePS(lumaHash);
+        shaderSwap.TrySubstitutePS(lumaHash,
+            EffectShader::UsesCentreViewMatrix(shader));
     // Luma port Phase 3: injected passes (XeGTAO/SMAA/ModulateLighting).
     // Evaluate triggers against the bound PS hash; OnDraw is a no-op unless a
     // trigger matches and the pass is enabled. Per-eye is automatic: the hook
@@ -1152,6 +1153,16 @@ void Install() {
         gs.EmissiveIntensity=readFloat(L"EmissiveIntensity",0.667f);
         gs.HDRBoostIntensity=readFloat(L"HDRBoostIntensity",1.0f);
         lumaSettingsCB.MarkDirty();
+        // Phase 4: overlap dedup. Default on — skip Luma substitution for
+        // shaders DXHRVR already corrects per-eye (projected light/shadow via
+        // F3, identified by EffectShader::UsesCentreViewMatrix).
+        shaderSwap.SetDedupWithDXHRVR(GetPrivateProfileIntW(L"Luma",L"DedupWithDXHRVR",1,config)!=0);
+        // When XeGTAO is enabled, skip Luma's SSAO generation replacement
+        // (XeGTAO overwrites the result, so the substitution is wasted work).
+        if(GetPrivateProfileIntW(L"Luma",L"XeGTAOEnable",0,config)!=0) {
+            shaderSwap.AddSkipHash(0xD44718C4u); // GenerateAmbientOcclusion (DC)
+            shaderSwap.AddSkipHash(0x7A054979u); // GenerateAmbientOcclusion (OG)
+        }
     }
     FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")) {
         fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d levelMenu=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,levelMenu,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0]);fclose(f);

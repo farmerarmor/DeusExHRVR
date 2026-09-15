@@ -141,3 +141,13 @@ DesaturationIntensity=0.333
 AmbientLightingIntensity=0.8
 EmissiveIntensity=0.667
 HDRBoostIntensity=1.0
+
+; Phase 4: overlap dedup. When on (default), Luma substitution is skipped for
+; shaders DXHRVR already corrects per-eye (projected light/shadow via F3,
+; identified at runtime via EffectShader::UsesCentreViewMatrix). Luma's mono
+; replacements might not respect DXHRVR's per-eye transforms, so skipping
+; avoids potential stereo conflicts. Also auto-skips Luma's SSAO generation
+; replacement when XeGTAO is enabled (XeGTAO overwrites the result). Skipped
+; hashes are logged to DeusExHRVR-shaderswap.log. Set to 0 to force Luma
+; substitution everywhere (for testing).
+DedupWithDXHRVR=1

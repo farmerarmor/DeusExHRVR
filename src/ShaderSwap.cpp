@@ -224,8 +224,23 @@ void ShaderSwap::SetSubstitutionEnabled(bool on) {
     Log("Substitution %s", on ? "ENABLED" : "disabled");
 }
 
-bool ShaderSwap::TrySubstitutePS(uint32_t hash) {
+bool ShaderSwap::TrySubstitutePS(uint32_t hash, bool dxhrvrCorrected) {
     if (!substituteEnabled || !hash || !context) return false;
+    // Phase 4: overlap dedup. Skip substitution when:
+    // (a) the hash is in the manual skip-list (e.g. SSAO gen when XeGTAO is
+    //     enabled — XeGTAO overwrites the result), or
+    // (b) dedupWithDXHRVR is on and DXHRVR already corrects this draw
+    //     per-eye (EffectShader::UsesCentreViewMatrix — projected light/shadow
+    //     shaders where DXHRVR's F3 rewrites InstanceParams per-eye). Luma's
+    //     mono replacement might not respect the per-eye transforms.
+    if (skipHashes.count(hash) || (dedupWithDXHRVR && dxhrvrCorrected)) {
+        bool first = skippedHashes.insert(hash).second;
+        if (first) {
+            const char* reason = skipHashes.count(hash) ? "skip-list" : "DXHRVR-corrected";
+            Log("SKIP %s hash=%s (%s)", reason, HashHex(hash).c_str(), reason);
+        }
+        return false;
+    }
     // GetReplacementPS compiles on first use, then returns from psCache.
     // The device pointer is read here without a lock (render-thread only,
     // same as context). A null device means SetDevice hasn't run yet.

@@ -77,6 +77,20 @@ public:
     // LumaSettings values.
     void SetLumaSettingsCB(LumaSettingsCB::Manager* m) { lumaSettingsCB = m; }
 
+    // Phase 4: overlap dedup with DXHRVR's existing per-eye corrections.
+    // When true, TrySubstitutePS skips substitution for shaders that DXHRVR
+    // already corrects stereo-correctly (projected light/shadow via F3, etc.).
+    // The `dxhrvrCorrected` flag is computed in RenderStateHook via
+    // EffectShader::UsesCentreViewMatrix and passed to TrySubstitutePS.
+    void SetDedupWithDXHRVR(bool on) { dedupWithDXHRVR = on; }
+    bool DedupWithDXHRVR() const { return dedupWithDXHRVR; }
+
+    // Add a ReShade CRC32 hash to the manual skip-list. Substitution is
+    // skipped for these hashes regardless of the dxhrvrCorrected flag.
+    // Used for e.g. SSAO generation when XeGTAO is enabled (XeGTAO overwrites
+    // the result, so Luma's replacement is wasted work).
+    void AddSkipHash(uint32_t hash) { skipHashes.insert(hash); }
+
     // Capture the D3D11 device + its immediate context for substitution.
     // Called once from NativeTransport::Producer::Init (the point where the
     // engine's device is first available). Render-thread only, like the rest
@@ -97,7 +111,11 @@ public:
     // true if a substitution was issued. No-op (returns false) if
     // substitution is off, the hash isn't in the table, the .cso is missing,
     // or the device/context isn't cached yet.
-    bool TrySubstitutePS(uint32_t hash);
+    //
+    // `dxhrvrCorrected`: when true + dedupWithDXHRVR is on, the substitution
+    // is skipped — DXHRVR's per-eye correction (F3/F4/F7) already handles
+    // this draw stereo-correctly, and Luma's mono replacement might conflict.
+    bool TrySubstitutePS(uint32_t hash, bool dxhrvrCorrected = false);
 
     // True if Load() found a table and at least one entry.
     bool Active() const;
@@ -137,6 +155,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     // Optional LumaSettings cbuffer manager (set via SetLumaSettingsCB).
     LumaSettingsCB::Manager* lumaSettingsCB{};
+    // Phase 4: dedup state
+    bool dedupWithDXHRVR{true};
+    std::unordered_set<uint32_t> skipHashes; // manual skip-list (CRC32 hashes)
+    std::unordered_set<uint32_t> skippedHashes; // first-skip logging
 
     void Log(const char* fmt, ...) const;
     static Stage ParseStage(const std::string& profile);

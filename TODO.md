@@ -17,19 +17,19 @@ SMAA VS+PS shaders compiled from `Luma_SMAA_impl.hlsl`.
 **Files:** `src/LumaPasses.cpp` (`RunSMAA`), `tools/compile_shaders.ps1`
 (compile the 6 SMAA shader variants), `shaders/dxhr/Luma_SMAA_impl.hlsl`.
 
-## 2. Phase 4: overlap dedup with DXHRVR stereo corrections
+## 2. Phase 4: overlap dedup with DXHRVR stereo corrections — DONE
 
-**Status:** DXHRVR already ships per-eye light/shadow/sky corrections
-(F3/F4/F7 toggles in `EngineCamera.cpp`) that subsume part of Luma's mono
-fixes — and do them stereo-correctly. Where Luma's mono shadow/lighting fixes
-collide with DXHRVR's existing corrections, we should prefer DXHRVR's per-eye
-versions and skip Luma's.
+**Status:** Implemented. `ShaderSwap::TrySubstitutePS` now accepts a
+`dxhrvrCorrected` flag (computed in `RenderStateHook` via
+`EffectShader::UsesCentreViewMatrix`) and skips substitution when
+`DedupWithDXHRVR=1` (default). Also auto-skips SSAO generation hashes when
+XeGTAO is enabled. Manual skip-list via `AddSkipHash()`. Skips logged to
+`DeusExHRVR-shaderswap.log`.
 
-**Task:** Build a classification table (shader hash → "DXHRVR already handles
-this stereo-correctly, skip Luma") so the two don't double-apply.
-
-**Files:** `src/ShaderSwap.cpp` (skip-list check before substitution),
-`src/EffectShader.h` (already has `UsesCentreViewMatrix` — extend).
+**Needs in-headset verification:** The auto-skip covers projected light/shadow
+(`UsesCentreViewMatrix`) + SSAO gen. Other shaders (sky, additive transparent
+geom) may also need skipping — test with `DedupWithDXHRVR=0` vs `=1` and
+add to `skipHashes` if stereo breaks.
 
 ## Done
 
