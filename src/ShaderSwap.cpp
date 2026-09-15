@@ -207,5 +207,37 @@ bool ShaderSwap::Active() const { return loaded; }
 
 ShaderSwap::Stats ShaderSwap::GetStats() const {
     // Render-thread only (OnPresent capture path); no lock needed.
-    return {noteCount, matchCount, matchedHashes.size()};
+    return {noteCount, matchCount, matchedHashes.size(), substitutionCount};
+}
+
+void ShaderSwap::SetDevice(ID3D11Device* dev) {
+    if (!dev) return;
+    device = dev;
+    dev->GetImmediateContext(&context);
+    Log("ShaderSwap device captured: dev=%p ctx=%p", dev, context.Get());
+}
+
+void ShaderSwap::SetSubstitutionEnabled(bool on) {
+    if (on == substituteEnabled) return;
+    substituteEnabled = on;
+    Log("Substitution %s", on ? "ENABLED" : "disabled");
+}
+
+bool ShaderSwap::TrySubstitutePS(uint32_t hash) {
+    if (!substituteEnabled || !hash || !context) return false;
+    // GetReplacementPS compiles on first use, then returns from psCache.
+    // The device pointer is read here without a lock (render-thread only,
+    // same as context). A null device means SetDevice hasn't run yet.
+    ID3D11PixelShader* replacement = device ? GetReplacementPS(hash, device.Get()) : nullptr;
+    if (!replacement) return false;
+    context->PSSetShader(replacement, nullptr, 0);
+    ++substitutionCount;
+    bool first = substitutedHashes.insert(hash).second;
+    if (first) {
+        const Entry* e = nullptr;
+        { auto it = pixel.find(hash); if (it != pixel.end()) e = &it->second; }
+        Log("SUBSTITUTE %s hash=%s -> %p (PSSetShader issued)",
+            e ? e->name.c_str() : "?", HashHex(hash).c_str(), replacement);
+    }
+    return true;
 }

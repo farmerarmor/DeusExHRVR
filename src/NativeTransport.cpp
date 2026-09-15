@@ -70,6 +70,11 @@ struct Producer {
         MemoryBarrier();InterlockedIncrement(&header->generation);
         width=d.Width;height=h;format=d.Format;
         Log("Native shared pair %ux%u (each eye %ux%u), generation=%ld",d.Width,d.Height,d.Width,h,header->generation);
+        // Luma port: the engine's D3D11 device is now known. Forward it to
+        // ShaderSwap so it can build replacement shaders and issue
+        // PSSetShader overrides. Producer::Init and RenderStateHook both run
+        // on the render thread, so the cached pointers stay race-free.
+        EngineCamera::SetShaderSwapDevice(dev);
         return true;
     }
     bool Launch() {

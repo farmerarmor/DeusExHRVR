@@ -44,7 +44,7 @@ std::atomic<void*> walkAction{},strafeAction{};
 float lastMoveInput[2]{},lastMoveOutput[2]{},lastMoveHeading{};
 float controllerMuzzleForward=.25f;
 uint64_t removedFlareSprites{};
-bool skyFix=true,f11Down{};
+bool skyFix=true,f11Down{},f12Down{};
 uint64_t skyCorrections{};
 ScreenMode screenMode;
 unsigned screenReasons{};
@@ -574,9 +574,11 @@ void __fastcall RenderStateHook(void* self,void*) {
     auto shader=effectShaders.Identify(*reinterpret_cast<uintptr_t*>(state+0x198));
     // Luma port: identify the bound pixel shader in ReShade's hash space so
     // the swap table can report (and later replace) Luma-targeted passes.
-    // Phase 1 is instrumentation only; no substitution is performed here.
+    // NoteBound returns the hash (0 if unreadable/not in table) for Phase 2's
+    // TrySubstitutePS call below.
+    uint32_t lumaHash=0;
     if(shaderSwap.Active())
-        shaderSwap.NoteBound(static_cast<uint32_t>(frameId.load()),
+        lumaHash=shaderSwap.NoteBound(static_cast<uint32_t>(frameId.load()),
                              ShaderSwap::Stage::Pixel,
                              *reinterpret_cast<uintptr_t*>(state+0x198));
     float* skyConstants{};CameraMath::Matrix savedSky;
@@ -615,6 +617,13 @@ void __fastcall RenderStateHook(void* self,void*) {
         }
     }
     originalRenderState(self);
+    // Luma port: the engine has just bound its pixel shader. If substitution
+    // is enabled (F12 or [Luma] SubstituteShaders=1) and this draw's PS has a
+    // Luma replacement, override it now so the imminent draw uses the fix.
+    // Runs per-draw on the render thread; TrySubstitutePS is a no-op when
+    // disabled or when no replacement exists for this hash.
+    if(lumaHash && shaderSwap.SubstitutionEnabled())
+        shaderSwap.TrySubstitutePS(lumaHash);
     if(effectsCapture)shaderTrace.Record(state,drawing.active);
     // Upload copied the corrected constants. Restore the engine's centre-view
     // copy so subsequent draws/eyes cannot accumulate the eye transform.
@@ -1105,6 +1114,10 @@ void Install() {
         // its directory is the game root the shader table is relative to.
         std::filesystem::path configPath=config;
         shaderSwap.Load(configPath.parent_path());
+        // Phase 2: substitution defaults off; opt in via ini. F12 can toggle
+        // it live regardless of this starting state.
+        bool sub=GetPrivateProfileIntW(L"Luma",L"SubstituteShaders",0,config)!=0;
+        shaderSwap.SetSubstitutionEnabled(sub);
     }
     FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")) {
         fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d levelMenu=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,levelMenu,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0]);fclose(f);
@@ -1157,7 +1170,7 @@ Transport::RenderInfo OnPresent(uint64_t frame,bool capture) {
         // dry run can be confirmed without a separate file read.
         if(shaderSwap.Active()) {
             auto ss=shaderSwap.GetStats();
-            FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")){fprintf(f,"shaderSwap notes=%llu matches=%llu unique=%llu frame=%llu\n",ss.notes,ss.matches,ss.uniqueMatches,frame);fclose(f);}
+            FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")){fprintf(f,"shaderSwap notes=%llu matches=%llu unique=%llu substitutions=%llu enabled=%d frame=%llu\n",ss.notes,ss.matches,ss.uniqueMatches,ss.substitutions,int(shaderSwap.SubstitutionEnabled()),frame);fclose(f);}
         }
     }
     bool f6=(GetAsyncKeyState(VK_F6)&0x8000)!=0,f9=(GetAsyncKeyState(VK_F9)&0x8000)!=0;
@@ -1175,6 +1188,11 @@ Transport::RenderInfo OnPresent(uint64_t frame,bool capture) {
     if(f11&&!f11Down){skyFix=!skyFix;FILE* f{};if(!fopen_s(&f,"DeusExHRVR-effects.log","a")){fprintf(f,"skyFix=%d frame=%llu\n",skyFix,frame);fclose(f);}}f11Down=f11;
     if(f3&&!f3Down){instanceFix=!instanceFix;FILE* f{};if(!fopen_s(&f,"DeusExHRVR-effects.log","a")){fprintf(f,"instanceFix=%d frame=%llu\n",instanceFix,frame);fclose(f);}}f3Down=f3;
     if(capture){FILE* f{};if(!fopen_s(&f,"DeusExHRVR-effects.log","a")){fprintf(f,"instanceFix=%d correctedDraws=%llu frame=%llu\n",instanceFix,instanceCorrections,frame);fclose(f);}}
+    // Luma port: F12 toggles live shader substitution (off by default; opt in
+    // via [Luma] SubstituteShaders=1). Lets you A/B the swap in-headset without
+    // restarting. Matches the existing F3/F4/F7 toggle pattern.
+    bool f12=(GetAsyncKeyState(VK_F12)&0x8000)!=0;
+    if(f12&&!f12Down){bool on=ToggleShaderSubstitution();FILE* f{};if(!fopen_s(&f,"DeusExHRVR-effects.log","a")){fprintf(f,"lumaSubstitute=%d frame=%llu\n",on,frame);fclose(f);}}f12Down=f12;
     if(f6&&!f6Down){requested=!requested;referenceValid=false;current.active=false;}
     if(f9&&!f9Down)recenterRequested=true;
     if((f6&&!f6Down)||(f9&&!f9Down)) {
@@ -1195,4 +1213,6 @@ bool SnapTurnView(float& yaw) {
     yaw=std::atan2(current.originalWorld.m[9],current.originalWorld.m[8]);
     return std::isfinite(yaw);
 }
+void SetShaderSwapDevice(ID3D11Device* device){shaderSwap.SetDevice(device);}
+bool ToggleShaderSubstitution(){bool on=!shaderSwap.SubstitutionEnabled();shaderSwap.SetSubstitutionEnabled(on);return on;}
 }

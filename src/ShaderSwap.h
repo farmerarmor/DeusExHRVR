@@ -63,15 +63,36 @@ public:
 
     // Lazily compile (or load) the replacement PS for `hash`. Returns nullptr
     // if no entry exists or compilation failed. Cached per (stage,hash).
-    // Phase 2 hook: not yet called from RenderStateHook.
     ID3D11PixelShader* GetReplacementPS(uint32_t hash, ID3D11Device* device);
     ID3D11ComputeShader* GetReplacementCS(uint32_t hash, ID3D11Device* device);
+
+    // Capture the D3D11 device + its immediate context for substitution.
+    // Called once from NativeTransport::Producer::Init (the point where the
+    // engine's device is first available). Render-thread only, like the rest
+    // of the swap, so the cached pointers need no synchronization.
+    void SetDevice(ID3D11Device* dev);
+
+    // Master switch for actual substitution. Off by default (Phase 1 was
+    // instrumentation only); turned on by [Luma] SubstituteShaders=1 or the
+    // F12 live toggle. When off, NoteBound still logs matches but no
+    // PSSetShader override is issued.
+    bool SubstitutionEnabled() const { return substituteEnabled; }
+    void SetSubstitutionEnabled(bool on);
+
+    // Substitute the currently-bound pixel shader with Luma's replacement for
+    // `hash`, if one exists and substitution is enabled. Called from
+    // RenderStateHook AFTER originalRenderState (the engine has just bound
+    // its shader), so the override is active for the imminent draw. Returns
+    // true if a substitution was issued. No-op (returns false) if
+    // substitution is off, the hash isn't in the table, the .cso is missing,
+    // or the device/context isn't cached yet.
+    bool TrySubstitutePS(uint32_t hash);
 
     // True if Load() found a table and at least one entry.
     bool Active() const;
 
     // Counts for the camera log line.
-    struct Stats { uint64_t notes{}; uint64_t matches{}; uint64_t uniqueMatches{}; };
+    struct Stats { uint64_t notes{}; uint64_t matches{}; uint64_t uniqueMatches{}; uint64_t substitutions{}; };
     // Named GetStats (not Stats) to avoid a MSVC name-lookup collision between
     // the nested Stats type and a member function of the same name.
     Stats GetStats() const;
@@ -95,7 +116,14 @@ private:
     // instrumentation (render-thread only)
     uint64_t noteCount{};
     uint64_t matchCount{};
+    uint64_t substitutionCount{};
     std::unordered_set<uint32_t> matchedHashes;
+    std::unordered_set<uint32_t> substitutedHashes; // first-substitution logging
+    // substitution state (render-thread only; SetDevice/SetSubstitutionEnabled
+    // are called from the render thread too)
+    bool substituteEnabled{false};
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
 
     void Log(const char* fmt, ...) const;
     static Stage ParseStage(const std::string& profile);

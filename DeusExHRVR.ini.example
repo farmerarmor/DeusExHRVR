@@ -107,7 +107,11 @@ SnapTurnPauseMs=60
 ; Native Luma-shader port (sidesteps ReShade). Loads a hash-keyed shader
 ; replacement table from DeusExHRVR/shaders/dxhr/table.csv. Set to 0 to
 ; disable the whole subsystem; a missing or empty table is harmless.
-; Phase 1 (current): instrumentation only — matches are logged to
-; DeusExHRVR-shaderswap.log and counted in the F8 camera log. No shaders are
-; replaced yet. Restart the game after changing this.
+; Match logging is always on when Enable=1; see DeusExHRVR-shaderswap.log.
 Enable=1
+; Actual pixel-shader substitution. Off by default for safety — flip on only
+; after confirming (via the match log) that hashes resolve against the live
+; game. F12 toggles this live without restarting. Substituted shaders are
+; logged to DeusExHRVR-shaderswap.log and counted in the F8 camera log as
+; 'substitutions='. Restart the game after changing this ini value.
+SubstituteShaders=0
