@@ -210,24 +210,46 @@ struct Bridge {
         }
         return r==XR_EVENT_UNAVAILABLE || Good(r,"xrPollEvent");
     }
+    // The native pair holds display-encoded pixels: it is what the desktop
+    // path presents to an sRGB monitor. Prefer the sRGB sibling of the same
+    // typeless family for the OpenXR swapchain so the runtime compositor
+    // applies the correct transfer function; a bit-exact family copy needs
+    // no conversion. Fall back to the native format only if the runtime
+    // offers no sRGB variant (image may then render dark).
+    static DXGI_FORMAT SrgbSibling(DXGI_FORMAT f) {
+        switch(f) {
+        case DXGI_FORMAT_R8G8B8A8_UNORM: return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+        case DXGI_FORMAT_B8G8R8A8_UNORM: return DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+        default: return f; // already sRGB, or formats with no sRGB variant (float, 10:10:10:2)
+        }
+    }
     bool EnsureSwapchain(const D3D11_TEXTURE2D_DESC& d,UINT h) {
-        if(swapchain && width==d.Width && height==h && format==d.Format)return true;
+        DXGI_FORMAT want=SrgbSibling(d.Format);
+        if(swapchain && width==d.Width && height==h && (format==want||format==d.Format))return true;
         DestroySwapchain();
         uint32_t n=0;
         if(!Good(xrEnumerateSwapchainFormats(session,0,&n,nullptr),"xrEnumerateSwapchainFormats"))return false;
         std::vector<int64_t> formats(n);
         if(!Good(xrEnumerateSwapchainFormats(session,n,&n,formats.data()),"xrEnumerateSwapchainFormats"))return false;
-        if(std::find(formats.begin(),formats.end(),int64_t(d.Format))==formats.end()) {
-            Log("Native texture format %d is unsupported by runtime; no reinterpretation",d.Format); return false;
+        auto supported=[&](DXGI_FORMAT f){return std::find(formats.begin(),formats.end(),int64_t(f))!=formats.end();};
+        if(!supported(want)) {
+            if(want!=d.Format && supported(d.Format)) {
+                Log("Runtime lacks sRGB swapchain format %d; using native linear %d (image may appear dark)",want,d.Format);
+                want=d.Format;
+            } else {
+                Log("Native texture format %d (sRGB variant %d) unsupported by runtime; no reinterpretation",d.Format,want); return false;
+            }
+        } else if(want!=d.Format) {
+            Log("Using sRGB swapchain format %d for native format %d (gamma-correct compositor sampling)",want,d.Format);
         }
         XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
         ci.usageFlags=XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT|XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT|XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-        ci.format=d.Format; ci.sampleCount=1; ci.width=d.Width; ci.height=h; ci.faceCount=1; ci.arraySize=2; ci.mipCount=1;
+        ci.format=want; ci.sampleCount=1; ci.width=d.Width; ci.height=h; ci.faceCount=1; ci.arraySize=2; ci.mipCount=1;
         if(!Good(xrCreateSwapchain(session,&ci,&swapchain),"xrCreateSwapchain"))return false;
         if(!Good(xrEnumerateSwapchainImages(swapchain,0,&n,nullptr),"xrEnumerateSwapchainImages"))return false;
         images.assign(n,{XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
         if(!Good(xrEnumerateSwapchainImages(swapchain,n,&n,reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data())),"xrEnumerateSwapchainImages"))return false;
-        width=d.Width; height=h; format=d.Format;
+        width=d.Width; height=h; format=want;
         Log("Native pair swapchain: %ux%u per eye, arraySize=2 format=%d images=%u",width,height,format,n);
         return true;
     }
