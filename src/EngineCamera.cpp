@@ -63,15 +63,22 @@ bool yawOnlyCamera=false; // Local patch: drop game camera pitch/roll (head-bob 
 CameraMath::Matrix RenderBase(const CameraMath::Matrix& game);
 // Local patch: keep only heading (yaw) from the recenter pose so head pitch/roll
 // at load or F9 does not tilt the world. Position (incl. height) is kept.
+// Heading only: the same facing direction with pitch and roll removed.
+Transport::Quaternion LevelHeading(Transport::Quaternion q) {
+    auto f=CameraMath::Rotate(q,{0,0,-1});
+    float yaw;
+    if(std::hypot(f.x,f.z)<.001f){auto r=CameraMath::Rotate(q,{1,0,0});yaw=std::atan2(-r.z,r.x);}
+    else yaw=std::atan2(-f.x,-f.z);
+    return {0,std::sin(yaw*.5f),0,std::cos(yaw*.5f)};
+}
 Transport::Pose LevelReference(Transport::Pose p) {
     if(!levelRecenter)return p;
-    auto f=CameraMath::Rotate(p.orientation,{0,0,-1});
-    float yaw;
-    if(std::hypot(f.x,f.z)<.001f){auto r=CameraMath::Rotate(p.orientation,{1,0,0});yaw=std::atan2(-r.z,r.x);}
-    else yaw=std::atan2(-f.x,-f.z);
-    p.orientation={0,std::sin(yaw*.5f),0,std::cos(yaw*.5f)};
+    p.orientation=LevelHeading(p.orientation);
     return p;
 }
+// Local patch (level in-game menu): LevelMenu=1 levels the head pose the view is
+// frozen at while the in-game menu (map/objectives/inventory) is open.
+bool levelMenu=true;
 float worldScale=100.f;
 // Local patch: optional per-frame camera trace for head-bob analysis.
 // Buffered in memory (4 MB stdio buffer) so it rarely touches the disk.
@@ -171,12 +178,13 @@ struct BobFilter {
 //
 // So hold the height and follow only real stance changes. Crouched and standing
 // differ by ~300 units, while gait offsets are 15-25 and walking bob is about 2,
-// so a trigger of 60 separates them cleanly. The game's own crouch and stand
-// move the camera at about 1000 units/s (middle 80% of the transition); the
-// default catch-up of 600 follows a little more gently.
+// so a trigger of 60 separates them cleanly. A real change is followed at the
+// game's own speed: its crouch and stand move the camera at about 1000 units/s
+// (measured over the middle 80% of the transition on the supported build).
 struct StanceHold {
     bool enabled{};
-    float trigger=60.f,rate=600.f;
+    float trigger=60.f;
+    static constexpr float rate=1000.f;
     float held{};bool have{},following{};
     double lastT{};
     struct Sample {double t;float v;};
@@ -247,8 +255,25 @@ struct Snapshot {
     void* playerInstance{};
     uint32_t inputIndex=~0u;
     bool active{};
+    CameraMath::Matrix tiltedWorld; // world before LevelFrozenView, still accepted by CreateHook
+    bool leveled{};
 };
 Snapshot current;
+// Local patch (level in-game menu): the game stops updating its camera while the
+// GameMenu screen is open, so the VR view freezes at the last head pose. These are
+// the inputs of the last tracked update, used to rebuild that pose level.
+std::atomic<bool> gameMenuOpen{};
+CameraMath::Matrix lastRenderBase,lastManagerRaw,lastOldView;
+uint32_t menuUpdates{};
+// Frames presented since the last tracked camera update. The game also stops its
+// camera on loading/briefing screens; after frozenLevelFrames the view is leveled
+// there too. The in-game menu, whose opening is hooked, is leveled at once.
+bool updatedSincePresent{};uint32_t presentsWithoutUpdate{};
+constexpr uint32_t frozenLevelFrames=10;
+// Local patch (reader buttons): the e-reader and news reader are Scaleform screens
+// shown over live gameplay. While one is open, [ScreenButtons] applies; the camera
+// and snap turn are unchanged.
+std::atomic<bool> readerOpen{};
 struct WeaponPose {void* weapon{};void* instance{};CameraMath::Matrix muzzle;uint64_t tick{};bool active{};void* owner{};};
 WeaponPose weaponPose;
 std::atomic<uint64_t> controllerDraws{},controllerMuzzles{};
@@ -643,6 +668,7 @@ void __fastcall UpdateHook(void* self,void*) {
     {
         std::lock_guard lock(stateMutex);
         current.active=false;
+        current.leveled=false;
         current.inputIndex=~0u;
         weaponPose={};
         auto manager=static_cast<unsigned char*>(self);
@@ -696,6 +722,15 @@ void __fastcall UpdateHook(void* self,void*) {
             current.view=CameraMath::InverseRigid(current.world);
             current.manager=CameraMath::Load(manager+0x13b0);
             auto oldView=CameraMath::Load(originalView(self));
+            lastRenderBase=renderBase;lastManagerRaw=current.manager;lastOldView=oldView;
+            updatedSincePresent=true;
+            // The camera never runs while the in-game menu is open (it stops before the
+            // menu's open call). If it keeps running, the close call was missed.
+            if(!gameMenuOpen)menuUpdates=0;
+            else if(++menuUpdates==30) {
+                gameMenuOpen=false;
+                FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")){fprintf(f,"gameMenu flag cleared: camera running frame=%llu\n",frameId.load());fclose(f);}
+            }
             for(int col=0;col<3;col++) {
                 float scale=0;for(int row=0;row<3;row++)scale+=current.manager.m[row*4+col]*oldView.m[row*4+col];
                 for(int row=0;row<3;row++)current.manager.m[row*4+col]=current.view.m[row*4+col]*scale;
@@ -777,7 +812,8 @@ void* __fastcall CreateHook(void* self,void*,void* viewport,void* target,void* d
     trace.original=snapshot.originalWorld;trace.tracked=snapshot.world;trace.pose=snapshot.tracking.id;
     if(viewport && snapshot.active) {
         auto p=static_cast<float*>(viewport);auto matrix=CameraMath::Load(p+12);
-        if(p[8]>0 && p[7]>1000 && (Match(matrix,snapshot.originalWorld)||Match(matrix,snapshot.world))) {
+        if(p[8]>0 && p[7]>1000 && (Match(matrix,snapshot.originalWorld)||Match(matrix,snapshot.world)||
+            (snapshot.leveled && Match(matrix,snapshot.tiltedWorld)))) {
             trace.reason=Match(matrix,snapshot.originalWorld)?5:6;
             memcpy(adjusted,viewport,sizeof(adjusted));auto v=reinterpret_cast<float*>(adjusted);
             memcpy(v+12,snapshot.world.m,64);for(int i=4;i<7;i++)v[12+i]=-v[12+i];
@@ -881,6 +917,97 @@ void __cdecl StereoHook(float* projection,bool firstEye,float width,float plane)
         {std::lock_guard lock(stateMutex);++stereoCalls;}
     } else originalStereo(projection,firstEye,width,plane);
 }
+// Local patch (level in-game menu): while the in-game menu or a loading/briefing
+// screen is up the game stops updating its camera, so every frame reuses the last
+// head pose, pitch and roll included, and the screen (a head-relative plane) is
+// pinned at that tilt. Once the pose is frozen, turn it about the head to heading
+// only, the same as LevelReference, and rebuild the camera from the last update's
+// inputs. The eyes keep their offsets from the head, the game world stays where it
+// is and the screen comes out level. Runs under stateMutex, once per frozen pose.
+void LevelFrozenView(uint64_t frame) {
+    if(updatedSincePresent || !current.active)presentsWithoutUpdate=0;else ++presentsWithoutUpdate;
+    updatedSincePresent=false;
+    if(!levelMenu || !current.active || current.leveled)return;
+    bool menu=gameMenuOpen;
+    // The in-game menu is known to be open: level at once. Anything else must stay
+    // frozen for a while first, so a brief stall in gameplay is left alone.
+    if(presentsWithoutUpdate<(menu?1u:frozenLevelFrames))return;
+    uint64_t id=current.tracking.id;
+    auto& t=current.tracking;
+    auto fwd=CameraMath::Rotate(t.head.orientation,{0,0,-1}),right=CameraMath::Rotate(t.head.orientation,{1,0,0});
+    double pitch=std::asin(std::clamp(double(fwd.y),-1.,1.))*180/3.14159265358979;
+    double roll=std::asin(std::clamp(double(right.y),-1.,1.))*180/3.14159265358979;
+    auto level=LevelHeading(t.head.orientation);
+    auto turn=CameraMath::Multiply(level,CameraMath::Inverse(t.head.orientation));
+    const auto head=t.head.position;
+    for(auto& e:t.eyes) {
+        auto offset=CameraMath::Rotate(turn,{e.pose.position.x-head.x,e.pose.position.y-head.y,e.pose.position.z-head.z});
+        e.pose.position={head.x+offset.x,head.y+offset.y,head.z+offset.z};
+        e.pose.orientation=CameraMath::Multiply(turn,e.pose.orientation);
+    }
+    t.head.orientation=level;
+    current.tiltedWorld=current.world;
+    current.world=CameraMath::HeadWorld(lastRenderBase,reference,t.head,worldScale);
+    current.view=CameraMath::InverseRigid(current.world);
+    current.manager=lastManagerRaw;
+    for(int col=0;col<3;col++) {
+        float scale=0;for(int row=0;row<3;row++)scale+=current.manager.m[row*4+col]*lastOldView.m[row*4+col];
+        for(int row=0;row<3;row++)current.manager.m[row*4+col]=current.view.m[row*4+col]*scale;
+        current.manager.m[12+col]+=(current.view.m[12+col]-lastOldView.m[12+col])*scale;
+    }
+    current.leveled=true;
+    FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")) {
+        fprintf(f,"levelMenu frame=%llu pose=%llu reason=%s removedPitch=%.1f removedRoll=%.1f\n",frame,id,menu?"menu":"frozen",pitch,roll);fclose(f);
+    }
+}
+#if defined(_M_IX86)
+// Local patch (level in-game menu, reader buttons): the in-game menu
+// (map/objectives/inventory), the e-reader and the news reader are the game's
+// NsGameMenu, NsIReader and NsNewsReader movie controllers: Scaleform screens, not
+// IMenu classes (title, pause, ending, making-of) that ScreenMode can see. Hook
+// their activate/deactivate (vtable slots 4/5, found through the game's RTTI) to
+// know when they are open. Each hook is a pass-through: it saves every register
+// and flag, notes the event, restores them and jumps into the original function,
+// so it cannot disturb the function's arguments or calling convention. Every
+// target is verified and hooked on its own: a mismatch skips only that hook and
+// never affects the camera hooks. Verification bytes stop before any absolute
+// address, which ASLR relocates.
+struct ScreenHook {uintptr_t address;const char* name;const char* event;const char* bytes;size_t length;};
+const ScreenHook screenHooks[]={
+    {0x7e8630,"GameMenu","open","\x53\x56\xbb\x01\x00\x00\x00",7},{0x7e8be0,"GameMenu","close","\x53\x56\x8b\xf1\x8b\x4e\x30",7},
+    {0x7f08c0,"IReader","open","\x83\xec\x30\x53\x56\x8b\xf1",7},{0x7f0530,"IReader","close","\x83\xec\x30\x53\x56\x8b\xf1\x57",8},
+    {0x7f7e70,"NewsReader","open","\x83\xec\x20\x53\x56\x8b\xf1",7},{0x7f76c0,"NewsReader","close","\x83\xec\x20\x53\x56\x8b\xf1\x33",8},
+};
+constexpr int screenHookCount=int(sizeof(screenHooks)/sizeof(screenHooks[0]));
+void* screenOriginals[screenHookCount]{};
+void __cdecl NoteScreen(int index,void* self) {
+    bool open=index%2==0;
+    if(index<2)gameMenuOpen=open;else readerOpen=open;
+    FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")) {
+        fprintf(f,"screen %s %s self=%p frame=%llu\n",screenHooks[index].name,screenHooks[index].event,self,frameId.load());fclose(f);
+    }
+}
+#define SCREEN_STUB(n) __declspec(naked) void ScreenStub##n() { \
+    __asm pushad __asm pushfd __asm push ecx __asm push n __asm call NoteScreen __asm add esp,8 \
+    __asm popfd __asm popad __asm jmp dword ptr [screenOriginals+n*4] }
+SCREEN_STUB(0) SCREEN_STUB(1) SCREEN_STUB(2) SCREEN_STUB(3) SCREEN_STUB(4) SCREEN_STUB(5)
+#undef SCREEN_STUB
+void InstallScreenHooks() {
+    void* stubs[]={(void*)&ScreenStub0,(void*)&ScreenStub1,(void*)&ScreenStub2,
+                   (void*)&ScreenStub3,(void*)&ScreenStub4,(void*)&ScreenStub5};
+    static_assert(sizeof(stubs)/sizeof(stubs[0])==screenHookCount,"one stub per screen hook");
+    FILE* f{};if(fopen_s(&f,"DeusExHRVR-camera.log","a"))f=nullptr;
+    for(int i=0;i<screenHookCount;i++) {
+        auto& h=screenHooks[i];auto target=reinterpret_cast<void*>(VA(h.address));
+        const char* result="hooked";
+        if(memcmp(target,h.bytes,h.length))result="skipped: unexpected bytes";
+        else if(MH_CreateHook(target,stubs[i],&screenOriginals[i])!=MH_OK)result="skipped: create failed";
+        else if(MH_EnableHook(target)!=MH_OK){MH_RemoveHook(target);result="skipped: enable failed";}
+        if(f)fprintf(f,"screen hook %s %s at 0x%x: %s\n",h.name,h.event,unsigned(h.address),result);
+    }
+    if(f)fclose(f);
+}
+#endif
 void Install() {
     base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     auto dos=reinterpret_cast<IMAGE_DOS_HEADER*>(base);
@@ -927,11 +1054,15 @@ void Install() {
         for(auto& h:hooks)MH_QueueEnableHook((void*)VA(h.address));enabled=MH_ApplyQueued()==MH_OK;
     }
     if(!enabled)for(auto& h:hooks){MH_DisableHook((void*)VA(h.address));MH_RemoveHook((void*)VA(h.address));}
+#if defined(_M_IX86)
+    if(enabled)InstallScreenHooks(); // after, and independent of, the camera hooks
+#endif
     wchar_t config[MAX_PATH]{};GetFullPathNameW(L"DeusExHRVR.ini",MAX_PATH,config,nullptr);
     wchar_t scaleText[32];GetPrivateProfileStringW(L"VR",L"WorldUnitsPerMetre",L"100",scaleText,32,config);
     float scale=static_cast<float>(_wtof(scaleText));if(std::isfinite(scale)&&scale>=10&&scale<=1000)worldScale=scale;
     lockVerticalCamera=GetPrivateProfileIntW(L"VR",L"LockVerticalCamera",0,config)!=0;
     levelRecenter=GetPrivateProfileIntW(L"VR",L"LevelRecenter",1,config)!=0;
+    levelMenu=GetPrivateProfileIntW(L"VR",L"LevelMenu",1,config)!=0;
     yawOnlyCamera=GetPrivateProfileIntW(L"VR",L"YawOnlyCamera",0,config)!=0;
     bobTrace=GetPrivateProfileIntW(L"VR",L"BobTrace",0,config)!=0;
     auto readInt=[&](const wchar_t* key,int fallback,int hi){return std::clamp(static_cast<int>(GetPrivateProfileIntW(L"VR",key,fallback,config)),0,hi);};
@@ -946,7 +1077,6 @@ void Install() {
     yawSwing.a.enabled=yawSwing.a.windowMs[0]>0;yawSwing.b.enabled=yawSwing.b.windowMs[0]>0;
     stanceHold.enabled=GetPrivateProfileIntW(L"VR",L"StanceHold",0,config)!=0;
     readFloat(L"StanceHoldTrigger",L"60",5,400,stanceHold.trigger);
-    readFloat(L"StanceHoldRate",L"600",50,5000,stanceHold.rate);
     stanceHold.Reset();
     motionControls=DirectionConfig::MotionEnabled(config);
     experimentalMotionControls=motionControls && GetPrivateProfileIntW(L"VR",L"ExperimentalMotionControls",0,config)!=0;
@@ -957,7 +1087,7 @@ void Install() {
     float muzzleForward=static_cast<float>(_wtof(scaleText));
     if(std::isfinite(muzzleForward) && muzzleForward>=0 && muzzleForward<=1)controllerMuzzleForward=muzzleForward;
     FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")) {
-        fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0]);fclose(f);
+        fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d levelMenu=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,levelMenu,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0]);fclose(f);
     }
 }
 }
@@ -971,6 +1101,7 @@ Transport::RenderInfo OnPresent(uint64_t frame,bool capture) {
     // Menus/videos can keep presenting while simulation (and camera updates)
     // is paused. Refresh here as well, before the following frame is built.
     RefreshScreenMode();if(screenReasons)current.active=false;
+    LevelFrozenView(frame);
     if(effectsCapture){SaveEffects(frame);effectCount=0;shaderTrace.End();}effectsCapture=capture;
     if(capture)shaderTrace.Begin(frame+1);
     auto completed=pairInfo;pairInfo={};
@@ -1028,11 +1159,13 @@ Transport::RenderInfo OnPresent(uint64_t frame,bool capture) {
 void SetChannel(Transport::Header* header){std::lock_guard lock(stateMutex);channel=header;trackingReader={};if(!header){current.active=false;referenceValid=false;}}
 // Local patch (snap turn): the game's own camera heading while full tracked VR
 // is showing gameplay. False in menus, terminals, scope and other screen modes.
-unsigned CurrentScreenReasons(){std::lock_guard lock(stateMutex);return screenReasons;}
+// Bits 32 (in-game menu) and 64 (e-reader, news reader) select [ScreenButtons] only;
+// the display stays tracked.
+unsigned CurrentScreenReasons(){std::lock_guard lock(stateMutex);return screenReasons|(gameMenuOpen?32u:0u)|(readerOpen?64u:0u);}
 bool SnapTurnView(float& yaw) {
     std::lock_guard lock(stateMutex);
     auto now=GetTickCount64();
-    if(!current.active || screenReasons || !current.playerInstance || now<current.tracking.tick || now-current.tracking.tick>=250)return false;
+    if(!current.active || screenReasons || gameMenuOpen || !current.playerInstance || now<current.tracking.tick || now-current.tracking.tick>=250)return false;
     yaw=std::atan2(current.originalWorld.m[9],current.originalWorld.m[8]);
     return std::isfinite(yaw);
 }

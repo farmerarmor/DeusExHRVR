@@ -49,7 +49,8 @@ int buttonHoldMs[buttonCount]{};uint64_t buttonDownAt[buttonCount]{};bool button
 uint32_t buttonTapTarget[buttonCount]{};uint64_t buttonTapUntil[buttonCount]{};
 uint32_t leftTriggerTarget=TargetLT,rightTriggerTarget=TargetRT;
 bool remapActive{};
-// [ScreenButtons]: layout for menus, terminals, hacking, videos and game over.
+// [ScreenButtons]: layout for everything that is not gameplay (menus, readers,
+// terminals, hacking, videos, game over, loading screens).
 uint32_t screenTarget[buttonCount]{};uint32_t screenLeftTrigger=TargetLT,screenRightTrigger=TargetRT;
 bool screenRemapActive{};
 uint32_t stickUpTarget{},stickDownTarget{}; // right stick up/down during gameplay (needs SnapTurn=1)
@@ -122,14 +123,18 @@ void ApplyScreenButtons(XINPUT_GAMEPAD& pad) {
     Emit(pad,screenRightTrigger,in.bRightTrigger>127,in.bRightTrigger);
 }
 void ApplyButtons(XINPUT_GAMEPAD& pad) {
-    // Gameplay (and scoped aiming) use [Buttons]; menus, terminals, hacking,
-    // videos and game over use [ScreenButtons]; anything else stays stock.
+    // Gameplay (and scoped aiming) use [Buttons]; everything else uses
+    // [ScreenButtons]: menus (including the in-game menu), the e-reader and news
+    // reader, terminals, hacking, videos, game over, and any state not recognized
+    // as gameplay (loading screens, cutscenes). A reader sits over live gameplay,
+    // so it takes [ScreenButtons] even though snap turn still works.
     float gameplayYaw=0;
-    bool gameplay=EngineCamera::SnapTurnView(gameplayYaw);
-    unsigned reasons=gameplay?0:EngineCamera::CurrentScreenReasons();
+    unsigned allReasons=EngineCamera::CurrentScreenReasons();
+    bool gameplay=EngineCamera::SnapTurnView(gameplayYaw) && !(allReasons&64);
+    unsigned reasons=gameplay?0:allReasons;
     if(!gameplay && reasons!=16) {
         for(size_t i=0;i<buttonCount;i++){buttonWasDown[i]=false;buttonTapUntil[i]=0;}
-        if(reasons)ApplyScreenButtons(pad);
+        ApplyScreenButtons(pad);
         return;
     }
     if(!remapActive)return;

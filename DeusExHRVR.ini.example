@@ -38,6 +38,14 @@ ControllerMuzzleForwardMetres=0.25
 ; on F9, so a head tilted up or down at that moment does not tilt the world.
 ; Position, including height, is still captured. 0 restores the old behavior.
 LevelRecenter=1
+; The view freezes while the in-game menu (map, objectives, inventory) or a
+; loading screen is up. Keep only the heading of that frozen pose so the screen
+; is level instead of tilted with the head. 0 restores the old behavior.
+LevelMenu=1
+; Place the virtual screen (title and pause menus, terminals, videos) upright,
+; 2 m straight ahead at head height, instead of tilted with the head.
+; 0 restores the old behavior.
+LevelScreen=1
 
 ; Take the VR rendering base from the game camera's heading and position only:
 ; the headset supplies all pitch and roll, including the walk animation's tilt.
@@ -51,10 +59,9 @@ YawOnlyCamera=0
 StanceHold=0
 ; Gap that counts as a real stance change, in game units. Crouched and standing
 ; differ by about 300; gait offsets are 15-25 and walking bob is about 2.
+; The view drops or rises through a real crouch or stand at the game's own
+; transition speed.
 StanceHoldTrigger=60
-; How fast the view follows a real stance change, in units per second.
-; The game's own crouch and stand move the camera at about 1000.
-StanceHoldRate=600
 
 ; Optional filtering of the walk animation's left-right heading swing, in
 ; milliseconds; 0 disables each stage. Two cascaded stages (walking, then a
@@ -84,9 +91,9 @@ SnapTurnPauseMs=60
 ; RightStickDown under [Buttons] hold a target while it is pushed up or down.
 
 ; Optional button layout. [Buttons] applies to gameplay and scoped aiming,
-; [ScreenButtons] to the title and pause menus, terminals, hacking, videos and
-; game over. It does not yet apply in the in-game hub (map, objectives,
-; inventory), which is not detected as a screen.
+; [ScreenButtons] to everything else: the title and pause menus, the in-game
+; menu (map, objectives, inventory), the e-reader and news reader, terminals,
+; hacking, videos, game over and loading screens.
 ; Omitted entries keep the stock layout. Inputs: RightA, RightB, LeftX, LeftY,
 ; LeftGrip, RightGrip, LeftStickClick, RightStickClick, LeftTrigger,
 ; RightTrigger. Targets: A B X Y LB RB LS RS LT RT Back Start DPadUp DPadDown

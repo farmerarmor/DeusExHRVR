@@ -9,6 +9,7 @@
 #include <vector>
 #include <array>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdarg>
 #include <filesystem>
@@ -39,6 +40,7 @@ struct Bridge {
     XrSpace space{}, headSpace{}; XrSwapchain swapchain{};
     XrSessionState state=XR_SESSION_STATE_UNKNOWN;
     bool running=false, anchorValid=false, failed=false;
+    bool levelScreen=true; // Local patch: [VR] LevelScreen, place the virtual screen level
     UINT width{}, height{}; DXGI_FORMAT format=DXGI_FORMAT_UNKNOWN;
     ComPtr<ID3D11Device> device; ComPtr<ID3D11DeviceContext> context;
     std::vector<XrSwapchainImageD3D11KHR> images;
@@ -52,6 +54,47 @@ struct Bridge {
     ControllerInput controller;
     bool historyArmed{},f10Down{};
     IDXGISwapChain* owner{};
+    // Local patch (frozen-view reset): while the game's camera is stopped (in-game
+    // menu, loading screens) every frame repeats one head pose, so the image stays
+    // where it froze and the headset's reset cannot bring it in front. On a reset,
+    // turn and move that frozen view onto the current head, like the virtual screen.
+    bool resetPending{};XrTime resetTime{};
+    uint64_t frozenId{};uint32_t frozenRepeats{};
+    bool frozenShift{};float frozenTurn{};XrVector3f frozenFrom{},frozenTo{};
+
+    // Heading about +Y of an orientation, from its forward (-Z) axis, or from its
+    // right axis when looking straight up or down.
+    static float Heading(const XrQuaternionf& q) {
+        float fx=-2.f*(q.x*q.z+q.w*q.y),fz=-(1.f-2.f*(q.x*q.x+q.y*q.y));
+        if(std::hypot(fx,fz)<.001f){float rx=1.f-2.f*(q.y*q.y+q.z*q.z),rz=2.f*(q.x*q.z-q.w*q.y);return std::atan2(-rz,rx);}
+        return std::atan2(-fx,-fz);
+    }
+    void FrozenReset(const Transport::Tracking& t,XrTime now,bool recenter) {
+        if(t.id!=frozenId){frozenId=t.id;frozenRepeats=0;frozenShift=false;}
+        else ++frozenRepeats;
+        if(recenter){resetPending=true;resetTime=now;}
+        if(!resetPending || now<resetTime)return;
+        resetPending=false;
+        if(!frozenRepeats)return; // a live view already follows the reset on its next frame
+        XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
+        if(!Good(xrLocateSpace(headSpace,space,now,&loc),"xrLocateSpace") || (loc.locationFlags&3)!=3)return;
+        XrQuaternionf frozen{};memcpy(&frozen,&t.head.orientation,sizeof(frozen));
+        frozenTurn=Heading(loc.pose.orientation)-Heading(frozen);
+        memcpy(&frozenFrom,&t.head.position,sizeof(frozenFrom));
+        frozenTo=loc.pose.position;frozenShift=true;
+        Log("Frozen view re-placed after reset: pose=%llu turned %.1f deg",t.id,double(frozenTurn)*57.29577951);
+    }
+    // Turn a pose about the frozen head by frozenTurn and move that head onto the
+    // current one. Offsets from the head (the eyes) are kept exactly.
+    XrPosef Shift(XrPosef p) const {
+        float c=std::cos(frozenTurn),s=std::sin(frozenTurn);
+        float dx=p.position.x-frozenFrom.x,dy=p.position.y-frozenFrom.y,dz=p.position.z-frozenFrom.z;
+        p.position={frozenTo.x+c*dx+s*dz,frozenTo.y+dy,frozenTo.z-s*dx+c*dz};
+        XrQuaternionf r{0,std::sin(frozenTurn*.5f),0,std::cos(frozenTurn*.5f)},q=p.orientation;
+        p.orientation={r.w*q.x+r.x*q.w+r.y*q.z-r.z*q.y,r.w*q.y-r.x*q.z+r.y*q.w+r.z*q.x,
+                       r.w*q.z+r.x*q.y-r.y*q.x+r.z*q.w,r.w*q.w-r.x*q.x-r.y*q.y-r.z*q.z};
+        return p;
+    }
 
     void DestroySwapchain() {
         images.clear();
@@ -131,6 +174,8 @@ struct Bridge {
         ri.referenceSpaceType=XR_REFERENCE_SPACE_TYPE_VIEW;
         if(!Good(xrCreateReferenceSpace(session,&ri,&headSpace),"xrCreateReferenceSpace VIEW"))return false;
         wchar_t config[MAX_PATH]{};GetFullPathNameW(L"DeusExHRVR.ini",MAX_PATH,config,nullptr);
+        levelScreen=GetPrivateProfileIntW(L"VR",L"LevelScreen",1,config)!=0;
+        Log("Virtual screen placement: %s",levelScreen?"level (LevelScreen=1)":"follows head tilt (LevelScreen=0)");
         if(trackingChannel && DirectionConfig::MotionEnabled(config)) {
             bool ok=controller.Init(instance,session);Log("Motion controller aim and Xbox buttons: %s",ok?"ready":"unavailable; native input retained");
             if(!ok)controller.Reset();
@@ -157,7 +202,10 @@ struct Bridge {
                     if(state==XR_SESSION_STATE_LOSS_PENDING || state==XR_SESSION_STATE_EXITING)return false;
                 }
             } else if(e.type==XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) return false;
-            else if(e.type==XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) anchorValid=false;
+            else if(e.type==XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
+                anchorValid=false;
+                resetPending=true;resetTime=reinterpret_cast<XrEventDataReferenceSpaceChangePending*>(&e)->changeTime;
+            }
             e={XR_TYPE_EVENT_DATA_BUFFER};
         }
         return r==XR_EVENT_UNAVAILABLE || Good(r,"xrPollEvent");
@@ -276,15 +324,19 @@ struct Bridge {
                             // Place the next interaction screen in front of the
                             // user, rather than at the startup menu's old anchor.
                             anchorValid=false;
+                            FrozenReset(renderInfo.tracking,fs.predictedDisplayTime,recenter);
                             for(UINT eye=0;eye<2;eye++) {
                                 auto& v=projectionViews[eye];auto& e=renderInfo.tracking.eyes[eye];
                                 memcpy(&v.pose,&e.pose,sizeof(v.pose));v.fov={e.left,e.right,e.up,e.down};
+                                if(frozenShift)v.pose=Shift(v.pose);
                                 v.subImage.swapchain=swapchain;v.subImage.imageArrayIndex=eye;
                                 v.subImage.imageRect={{0,0},{int32_t(d.Width),int32_t(h)}};
                             }
                             projection.space=space;projection.viewCount=2;projection.views=projectionViews;
                             layers[layerCount++]=reinterpret_cast<XrCompositionLayerBaseHeader*>(&projection);
                         }
+                        // The virtual screen handles its own reset through anchorValid.
+                        if(!tracked){resetPending=false;frozenShift=false;frozenId=0;}
                         if(!tracked && (!anchorValid || recenter)) {
                             XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
                             if(Good(xrLocateSpace(headSpace,space,fs.predictedDisplayTime,&loc),"xrLocateSpace") &&
@@ -292,9 +344,25 @@ struct Bridge {
                                (XR_SPACE_LOCATION_POSITION_VALID_BIT|XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) {
                                 anchor=loc.pose;
                                 auto q=anchor.orientation;
-                                anchor.position.x-=4.f*(q.x*q.z+q.w*q.y);
-                                anchor.position.y-=4.f*(q.y*q.z-q.w*q.x);
-                                anchor.position.z-=2.f*(1.f-2.f*(q.x*q.x+q.y*q.y));
+                                if(levelScreen) {
+                                    // Local patch: keep only the heading, so the screen stands
+                                    // upright and level 2 m straight ahead at head height,
+                                    // however the head was tilted when it was placed. Same
+                                    // treatment as LevelReference() in EngineCamera.cpp.
+                                    float fx=-2.f*(q.x*q.z+q.w*q.y),fz=-(1.f-2.f*(q.x*q.x+q.y*q.y)); // forward (-Z)
+                                    float yaw;
+                                    if(std::hypot(fx,fz)<.001f) { // looking straight up or down: use the head's right side
+                                        float rx=1.f-2.f*(q.y*q.y+q.z*q.z),rz=2.f*(q.x*q.z-q.w*q.y);
+                                        yaw=std::atan2(-rz,rx);
+                                    } else yaw=std::atan2(-fx,-fz);
+                                    anchor.orientation={0,std::sin(yaw*.5f),0,std::cos(yaw*.5f)};
+                                    anchor.position.x-=2.f*std::sin(yaw);
+                                    anchor.position.z-=2.f*std::cos(yaw);
+                                } else {
+                                    anchor.position.x-=4.f*(q.x*q.z+q.w*q.y);
+                                    anchor.position.y-=4.f*(q.y*q.z-q.w*q.x);
+                                    anchor.position.z-=2.f*(1.f-2.f*(q.x*q.x+q.y*q.y));
+                                }
                                 anchorValid=true;
                             }
                         }
