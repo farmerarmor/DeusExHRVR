@@ -274,6 +274,10 @@ constexpr uint32_t frozenLevelFrames=10;
 // shown over live gameplay. While one is open, [ScreenButtons] applies; the camera
 // and snap turn are unchanged.
 std::atomic<bool> readerOpen{};
+// Local patch (weapon wheel): the wheel pauses the game with the camera stopped.
+// While it is open the frozen view is left alone and the gameplay button layout is
+// kept, so the button being held to show the wheel keeps working.
+std::atomic<bool> wheelOpen{};
 struct WeaponPose {void* weapon{};void* instance{};CameraMath::Matrix muzzle;uint64_t tick{};bool active{};void* owner{};};
 WeaponPose weaponPose;
 std::atomic<uint64_t> controllerDraws{},controllerMuzzles{};
@@ -928,6 +932,7 @@ void LevelFrozenView(uint64_t frame) {
     if(updatedSincePresent || !current.active)presentsWithoutUpdate=0;else ++presentsWithoutUpdate;
     updatedSincePresent=false;
     if(!levelMenu || !current.active || current.leveled)return;
+    if(wheelOpen)return; // the wheel pauses gameplay; leave the view as it is
     bool menu=gameMenuOpen;
     // The in-game menu is known to be open: level at once. Anything else must stay
     // frozen for a while first, so a brief stall in gameplay is left alone.
@@ -977,12 +982,23 @@ const ScreenHook screenHooks[]={
     {0x7e8630,"GameMenu","open","\x53\x56\xbb\x01\x00\x00\x00",7},{0x7e8be0,"GameMenu","close","\x53\x56\x8b\xf1\x8b\x4e\x30",7},
     {0x7f08c0,"IReader","open","\x83\xec\x30\x53\x56\x8b\xf1",7},{0x7f0530,"IReader","close","\x83\xec\x30\x53\x56\x8b\xf1\x57",8},
     {0x7f7e70,"NewsReader","open","\x83\xec\x20\x53\x56\x8b\xf1",7},{0x7f76c0,"NewsReader","close","\x83\xec\x20\x53\x56\x8b\xf1\x33",8},
+    // The weapon wheel (hold Y for the quick inventory) is NsQuickSelector. It pauses
+    // the game with the camera stopped, which otherwise looks exactly like a loading
+    // screen: the view would be leveled and the buttons would switch layout, so the
+    // held button that opened the wheel would stop being held and the wheel would
+    // close. While it is open the view and the gameplay layout are kept.
+    // Measured 2026-09-19: NsMenuWheel never opens on this build, and
+    // NsAugmentationWheel opens once at startup and never closes (it is a permanent
+    // HUD element), so neither may be treated as a pause.
+    {0x7fe860,"QuickSelector","open","\x83\xec\x24\x56\x57\x8b\xf1\xe8",8},{0x7fe670,"QuickSelector","close","\xe8\x2b\x29\xfc\xff\x6a\x00\x68",8},
 };
 constexpr int screenHookCount=int(sizeof(screenHooks)/sizeof(screenHooks[0]));
 void* screenOriginals[screenHookCount]{};
 void __cdecl NoteScreen(int index,void* self) {
     bool open=index%2==0;
-    if(index<2)gameMenuOpen=open;else readerOpen=open;
+    if(index<2)gameMenuOpen=open;
+    else if(index<6)readerOpen=open;
+    else wheelOpen=open;
     FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")) {
         fprintf(f,"screen %s %s self=%p frame=%llu\n",screenHooks[index].name,screenHooks[index].event,self,frameId.load());fclose(f);
     }
@@ -991,10 +1007,11 @@ void __cdecl NoteScreen(int index,void* self) {
     __asm pushad __asm pushfd __asm push ecx __asm push n __asm call NoteScreen __asm add esp,8 \
     __asm popfd __asm popad __asm jmp dword ptr [screenOriginals+n*4] }
 SCREEN_STUB(0) SCREEN_STUB(1) SCREEN_STUB(2) SCREEN_STUB(3) SCREEN_STUB(4) SCREEN_STUB(5)
+SCREEN_STUB(6) SCREEN_STUB(7)
 #undef SCREEN_STUB
 void InstallScreenHooks() {
-    void* stubs[]={(void*)&ScreenStub0,(void*)&ScreenStub1,(void*)&ScreenStub2,
-                   (void*)&ScreenStub3,(void*)&ScreenStub4,(void*)&ScreenStub5};
+    void* stubs[]={(void*)&ScreenStub0,(void*)&ScreenStub1,(void*)&ScreenStub2,(void*)&ScreenStub3,
+                   (void*)&ScreenStub4,(void*)&ScreenStub5,(void*)&ScreenStub6,(void*)&ScreenStub7};
     static_assert(sizeof(stubs)/sizeof(stubs[0])==screenHookCount,"one stub per screen hook");
     FILE* f{};if(fopen_s(&f,"DeusExHRVR-camera.log","a"))f=nullptr;
     for(int i=0;i<screenHookCount;i++) {
@@ -1160,12 +1177,13 @@ void SetChannel(Transport::Header* header){std::lock_guard lock(stateMutex);chan
 // Local patch (snap turn): the game's own camera heading while full tracked VR
 // is showing gameplay. False in menus, terminals, scope and other screen modes.
 // Bits 32 (in-game menu) and 64 (e-reader, news reader) select [ScreenButtons] only;
-// the display stays tracked.
-unsigned CurrentScreenReasons(){std::lock_guard lock(stateMutex);return screenReasons|(gameMenuOpen?32u:0u)|(readerOpen?64u:0u);}
+// the display stays tracked. Bit 128 is the opposite: a wheel screen pausing
+// gameplay, where [Buttons] must be kept.
+unsigned CurrentScreenReasons(){std::lock_guard lock(stateMutex);return screenReasons|(gameMenuOpen?32u:0u)|(readerOpen?64u:0u)|(wheelOpen?128u:0u);}
 bool SnapTurnView(float& yaw) {
     std::lock_guard lock(stateMutex);
     auto now=GetTickCount64();
-    if(!current.active || screenReasons || gameMenuOpen || !current.playerInstance || now<current.tracking.tick || now-current.tracking.tick>=250)return false;
+    if(!current.active || screenReasons || gameMenuOpen || wheelOpen || !current.playerInstance || now<current.tracking.tick || now-current.tracking.tick>=250)return false;
     yaw=std::atan2(current.originalWorld.m[9],current.originalWorld.m[8]);
     return std::isfinite(yaw);
 }

@@ -127,10 +127,17 @@ void ApplyButtons(XINPUT_GAMEPAD& pad) {
     // [ScreenButtons]: menus (including the in-game menu), the e-reader and news
     // reader, terminals, hacking, videos, game over, and any state not recognized
     // as gameplay (loading screens, cutscenes). A reader sits over live gameplay,
-    // so it takes [ScreenButtons] even though snap turn still works.
+    // so it takes [ScreenButtons] even though snap turn still works. A wheel screen
+    // (bit 128) is the reverse: it pauses the game with the camera stopped, which
+    // looks like a loading screen, but the layout must stay on [Buttons] or the
+    // button being held to show the wheel would stop being held. The wheel's own
+    // prompt asks for a left stick click to deselect the consumable, and nothing
+    // else in the wheel uses that click, so it is sent as the game expects it
+    // whatever [Buttons] maps it to; otherwise the consumable stays selected and is
+    // used along with the weapon.
     float gameplayYaw=0;
     unsigned allReasons=EngineCamera::CurrentScreenReasons();
-    bool gameplay=EngineCamera::SnapTurnView(gameplayYaw) && !(allReasons&64);
+    bool gameplay=(EngineCamera::SnapTurnView(gameplayYaw) && !(allReasons&64)) || (allReasons&128)!=0;
     unsigned reasons=gameplay?0:allReasons;
     if(!gameplay && reasons!=16) {
         for(size_t i=0;i<buttonCount;i++){buttonWasDown[i]=false;buttonTapUntil[i]=0;}
@@ -143,8 +150,14 @@ void ApplyButtons(XINPUT_GAMEPAD& pad) {
     pad.wButtons=in.wButtons&~owned; // D-pad gestures, Back and Start pulses stay as-is
     pad.bLeftTrigger=pad.bRightTrigger=0;
     auto now=GetTickCount64();
+    bool wheel=(allReasons&128)!=0;
     for(size_t i=0;i<buttonCount;i++) {
         bool on=(in.wButtons&buttonSources[i].bit)!=0;
+        if(wheel && buttonSources[i].bit==XINPUT_GAMEPAD_LEFT_THUMB) { // the wheel's deselect
+            buttonWasDown[i]=on;buttonTapUntil[i]=0;
+            Emit(pad,XINPUT_GAMEPAD_LEFT_THUMB,on,on?BYTE(255):BYTE(0));
+            continue;
+        }
         if(on && !buttonWasDown[i])buttonDownAt[i]=now;
         if(!on && buttonWasDown[i] && buttonTapTarget[i] && now-buttonDownAt[i]<uint64_t(buttonHoldMs[i]))
             buttonTapUntil[i]=now+120; // released before the hold delay: it was a tap
