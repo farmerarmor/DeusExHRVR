@@ -277,6 +277,7 @@ bool Read(XINPUT_GAMEPAD& pad) {
         static_assert(sizeof(pad)==sizeof(Transport::Gamepad)-sizeof(uint32_t));
         std::memcpy(&pad,&latest.gamepad.buttons,sizeof(pad));connected=true;
         ApplyButtons(pad);
+        if(EngineCamera::ImmersiveScopeButton())pad.wButtons|=XINPUT_GAMEPAD_RIGHT_THUMB;
         if(snapEnabled)SnapTurn(pad);
     }
     // Keep the device connected after first activation, but release every

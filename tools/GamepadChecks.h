@@ -42,6 +42,25 @@ inline void CheckGamepadMapping() {
         Check(!(p.buttons&XINPUT_GAMEPAD_RIGHT_THUMB),"D-pad chord release never also toggles scope");
         Check(p.leftX || p.leftY,"walking resumes after modifier release");
     }
+    for(bool pause:{false,true}) {
+        m.Reset();i={};i.active=true;i.rightClick=true;
+        i.x=!pause;i.y=pause;
+        const auto menuBit=pause?XINPUT_GAMEPAD_START:XINPUT_GAMEPAD_BACK;
+        Check(m.Update(i,100).buttons==menuBit,"right-stick plus left face button sends only its menu");
+        Check(m.Update(i,150).buttons==menuBit,"menu chord stays held without face action");
+        i.rightClick=false;
+        Check(m.Update(i,200).buttons==0,"modifier released first does not fire scope, reload or takedown");
+        i.x=i.y=false;m.Update(i,220);i.x=!pause;i.y=pause;
+        Check(m.Update(i,240).buttons==(pause?XINPUT_GAMEPAD_B:XINPUT_GAMEPAD_X),"normal face action resumes after release");
+        m.Reset();i.rightClick=true;m.Update(i,300);i.x=i.y=false;
+        Check(m.Update(i,320).buttons==0,"face button released first releases menu");
+        i.rightClick=false;Check(m.Update(i,340).buttons==0,"menu chord never also triggers scope");
+    }
+    m.Reset();i={};i.active=true;i.rightClick=true;i.x=true;i.leftY=1;
+    p=m.Update(i,100);
+    Check(p.buttons==(XINPUT_GAMEPAD_BACK|XINPUT_GAMEPAD_DPAD_UP)&&!p.leftY,"menu chord and D-pad coexist without walking");
+    i.active=false;m.Update(i,110);i={};i.active=true;i.x=true;
+    Check(m.Update(i,120).buttons==XINPUT_GAMEPAD_X,"focus loss clears consumed face buttons");
     m.Reset();i={};i.active=true;i.rightClick=true;i.leftX=.7f;i.leftY=.8f;
     Check(m.Update(i,100).buttons==XINPUT_GAMEPAD_DPAD_UP,"diagonal selects just one augmentation");
     i.leftX=i.leftY=.1f;Check(m.Update(i,200).buttons==0,"D-pad centre releases direction");

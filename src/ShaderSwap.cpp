@@ -173,7 +173,7 @@ ID3D11PixelShader* ShaderSwap::GetReplacementPS(uint32_t hash, ID3D11Device* dev
     HRESULT hr = device->CreatePixelShader(blob.data(), blob.size(), nullptr, &ps);
     if (FAILED(hr)) { Log("GetReplacementPS %s: CreatePixelShader hr=%08lx", HashHex(hash).c_str(), hr); return nullptr; }
     std::lock_guard lock(m);
-    psCache[hash] = Microsoft::WRL::ComPtr<ID3D11PixelShader>(ps);
+    psCache[hash].Attach(ps);
     Log("Compiled replacement PS %s (%s) -> %p", HashHex(hash).c_str(), e.name.c_str(), ps);
     return ps;
 }
@@ -199,7 +199,7 @@ ID3D11ComputeShader* ShaderSwap::GetReplacementCS(uint32_t hash, ID3D11Device* d
     HRESULT hr = device->CreateComputeShader(blob.data(), blob.size(), nullptr, &cs);
     if (FAILED(hr)) { Log("GetReplacementCS %s: CreateComputeShader hr=%08lx", HashHex(hash).c_str(), hr); return nullptr; }
     std::lock_guard lock(m);
-    csCache[hash] = Microsoft::WRL::ComPtr<ID3D11ComputeShader>(cs);
+    csCache[hash].Attach(cs);
     Log("Compiled replacement CS %s (%s) -> %p", HashHex(hash).c_str(), e.name.c_str(), cs);
     return cs;
 }
@@ -226,6 +226,13 @@ void ShaderSwap::SetSubstitutionEnabled(bool on) {
 
 bool ShaderSwap::TrySubstitutePS(uint32_t hash, bool dxhrvrCorrected) {
     if (!substituteEnabled || !hash || !context) return false;
+    auto entry=pixel.find(hash);
+    if(entry==pixel.end())return false;
+    const auto& name=entry->second.name;
+    // Only the requested lighting/color effects. Keep native UI, sky, copy,
+    // distortion and antialiasing paths (including their existing VR fixes).
+    if(name!="BloomComposition_DC" && name!="GenBloom1_DC" && name!="BloomBlur" &&
+       name!="ColorGrading" && name!="Normal" && name!="Emissive")return false;
     // Phase 4: overlap dedup. Skip substitution when:
     // (a) the hash is in the manual skip-list (e.g. SSAO gen when XeGTAO is
     //     enabled — XeGTAO overwrites the result), or
@@ -246,6 +253,9 @@ bool ShaderSwap::TrySubstitutePS(uint32_t hash, bool dxhrvrCorrected) {
     // same as context). A null device means SetDevice hasn't run yet.
     ID3D11PixelShader* replacement = device ? GetReplacementPS(hash, device.Get()) : nullptr;
     if (!replacement) return false;
+    context->PSGetShader(&savedShader,nullptr,nullptr);
+    context->PSGetConstantBuffers(LumaSettingsCB::kSlot,1,&savedSettings);
+    drawOverridden=true;
     // Bind LumaSettings at b13 before PSSetShader so the replacement shader
     // (which reads LumaSettings.GameSettings.* for intensity multipliers etc.)
     // sees correct values. The engine's next PSSetConstantBuffers will
@@ -262,4 +272,55 @@ bool ShaderSwap::TrySubstitutePS(uint32_t hash, bool dxhrvrCorrected) {
             e ? e->name.c_str() : "?", HashHex(hash).c_str(), replacement);
     }
     return true;
+}
+
+void ShaderSwap::RestoreDrawOverrides() {
+    if(!drawOverridden || !context)return;
+    context->PSSetShader(savedShader.Get(),nullptr,0);
+    ID3D11Buffer* original=savedSettings.Get();
+    context->PSSetConstantBuffers(LumaSettingsCB::kSlot,1,&original);
+    savedShader.Reset();savedSettings.Reset();drawOverridden=false;
+}
+
+// F8-only, read-only description of the actual per-eye bindings. This is
+// deliberately before substitution/injection, so the capture describes the game.
+void ShaderSwap::CaptureDraw(uint32_t frame, uint32_t hash, unsigned eye) {
+    if (!context) return;
+    static uint32_t lastFrame = ~0u;
+    static unsigned count = 0;
+    if (lastFrame != frame) { lastFrame = frame; count = 0; }
+    if (count++ >= 2048) return;
+    FILE* f{};
+    if (fopen_s(&f, "DeusExHRVR-luma-bindings.log", "a")) return;
+    auto found = pixel.find(hash);
+    fprintf(f, "frame=%u draw=%u eye=%u hash=%08x name=%s", frame, count, eye,
+        hash, found == pixel.end() ? "unknown" : found->second.name.c_str());
+    D3D11_VIEWPORT vp[16]{}; UINT n = 16;
+    context->RSGetViewports(&n, vp);
+    for (UINT i=0;i<n;++i) fprintf(f," vp%u=%g,%g,%g,%g",i,vp[i].TopLeftX,vp[i].TopLeftY,vp[i].Width,vp[i].Height);
+    auto describe = [&](const char* label, unsigned slot, ID3D11View* view) {
+        if (!view) return;
+        Microsoft::WRL::ComPtr<ID3D11Resource> resource;
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
+        view->GetResource(&resource);
+        if (SUCCEEDED(resource.As(&tex))) {
+            D3D11_TEXTURE2D_DESC d{}; tex->GetDesc(&d);
+            fprintf(f," %s%u=%p/%p:%ux%u:fmt%u:array%u:mips%u:bind%x",label,slot,view,resource.Get(),d.Width,d.Height,d.Format,d.ArraySize,d.MipLevels,d.BindFlags);
+        }
+    };
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv[8];
+    Microsoft::WRL::ComPtr<ID3D11DepthStencilView> dsv;
+    context->OMGetRenderTargets(8,&rtv[0],&dsv);
+    for (UINT i=0;i<8;++i) describe("rt",i,rtv[i].Get());
+    describe("depth",0,dsv.Get());
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv[8];
+    context->PSGetShaderResources(0,8,&srv[0]);
+    for (UINT i=0;i<8;++i) {
+        describe("srv",i,srv[i].Get());
+        if(srv[i]) { D3D11_SHADER_RESOURCE_VIEW_DESC d{};srv[i]->GetDesc(&d);fprintf(f," srvView%u=dim%u:fmt%u:mip%u",i,d.ViewDimension,d.Format,d.Texture2D.MostDetailedMip); }
+    }
+    Microsoft::WRL::ComPtr<ID3D11Buffer> cb[4];
+    context->PSGetConstantBuffers(0,4,&cb[0]);
+    for (UINT i=0;i<4;++i) if(cb[i]) { D3D11_BUFFER_DESC d{};cb[i]->GetDesc(&d);fprintf(f," cb%u=%p:%u",i,cb[i].Get(),d.ByteWidth); }
+    fputc('\n',f); fclose(f);
 }

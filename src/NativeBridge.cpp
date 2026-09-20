@@ -282,6 +282,9 @@ struct Bridge {
         context->Unmap(staging.Get(),0); Log("Captured both native eye regions from sourceFrame=%llu",id);
     }
     void Frame(ID3D11Texture2D* pair,UINT h,bool swap,bool capture,bool recenter) {
+        static uint32_t startupFrames{};
+        bool trace=++startupFrames<=8;
+        if(trace)Log("XR startup frame=%u source=%llu state=%d running=%d: enter",startupFrames,sourceFrame,state,running);
         D3D11_TEXTURE2D_DESC d{}; pair->GetDesc(&d);
         bool f10=(GetAsyncKeyState(VK_F10)&0x8000)!=0;
         if(f10&&!f10Down){historyArmed=!historyArmed;if(!historyArmed)history.Reset();Log("Rolling native-pair history %s (F8 saves previous 360 frames)",historyArmed?"armed":"off");}
@@ -293,7 +296,9 @@ struct Bridge {
         if(capture)Capture(pair,h,sourceFrame);
         if(!running){Sleep(10);return;}
         XrFrameWaitInfo wi{XR_TYPE_FRAME_WAIT_INFO}; XrFrameState fs{XR_TYPE_FRAME_STATE};
+        if(trace)Log("XR startup: before xrWaitFrame");
         if(!Good(xrWaitFrame(session,&wi,&fs),"xrWaitFrame")) {failed=true; return;}
+        if(trace)Log("XR startup: after xrWaitFrame shouldRender=%u",fs.shouldRender);
         if(fs.predictedDisplayPeriod!=lastPeriod) {
             lastPeriod=fs.predictedDisplayPeriod;
             if(getRefresh)getRefresh(session,&display.refreshHz);
@@ -321,6 +326,7 @@ struct Bridge {
         if(frameReadyEvent)SetEvent(frameReadyEvent);
         XrFrameBeginInfo bi{XR_TYPE_FRAME_BEGIN_INFO};
         if(!Good(xrBeginFrame(session,&bi),"xrBeginFrame")){failed=true;return;}
+        if(trace)Log("XR startup: after xrBeginFrame tracking=%u",tracking.valid);
         XrCompositionLayerQuad quads[2]{{XR_TYPE_COMPOSITION_LAYER_QUAD},{XR_TYPE_COMPOSITION_LAYER_QUAD}};
         XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
         XrCompositionLayerProjectionView projectionViews[2]{{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
@@ -405,6 +411,7 @@ struct Bridge {
         XrFrameEndInfo ei{XR_TYPE_FRAME_END_INFO}; ei.displayTime=fs.predictedDisplayTime;
         ei.environmentBlendMode=XR_ENVIRONMENT_BLEND_MODE_OPAQUE; ei.layerCount=layerCount; ei.layers=layers;
         if(Good(xrEndFrame(session,&ei),"xrEndFrame")) {
+            if(trace)Log("XR startup: after xrEndFrame layers=%u",layerCount);
             if(layerCount) {
                 pairs++;
                 static uint32_t lastMode=99;

@@ -15,6 +15,9 @@ LockVerticalCamera=0
 ; tracking, Xbox button emulation, weapon motion, and controller directions.
 ; Headset VR and Headset direction settings still work. Restart to apply.
 MotionControls=1
+; Optional full-headset scope with right-controller aiming; requires weapon motion.
+ImmersiveScope=0
+ScopeMagnification=4
 
 ; Independent directions: Mouse, Headset, or Controller (right-hand aim).
 ; Mouse retains native mouse/gamepad look direction. Restart after editing.
@@ -120,15 +123,12 @@ SubstituteShaders=0
 ; off; enable individually after confirming the trigger hashes match. Counts
 ; appear in the F8 camera log as 'lumaPasses xegtao=N smaa=N modulate=N'.
 ; Restart the game after changing these.
-; XeGTAO: Intel XeGTAO ambient occlusion, replacing the game's SSAO. Runs 4
-; compute dispatches per eye when the engine's SSAO Copy draw fires. Requires
-; the XeGTAO .cso blobs in DeusExHRVR/shaders/dxhr/compiled/.
-XeGTAOEnable=0
+; Native game ambient occlusion is retained; the XeGTAO experiment was withdrawn.
 ; SMAA: subpixel morphological AA replacing the game's MLAA. Phase 3e (stub —
 ; trigger detection only; full draw passes land in a later commit).
 SMAAEnable=0
-; ModulateLighting: custom PS pass on the lighting buffer before materials
-; composite. Phase 3f (stub).
+; ModulateLighting: adjust the completed lighting buffer before materials
+; sample it, separately for each eye.
 ModulateLightingEnable=0
 
 ; LumaSettings cbuffer values. These are passed to Luma's replacement + injected
@@ -141,6 +141,13 @@ DesaturationIntensity=0.333
 AmbientLightingIntensity=0.8
 EmissiveIntensity=0.667
 HDRBoostIntensity=1.0
+; RGB multipliers; 1 is neutral. Lighting* requires ModulateLightingEnable=1.
+LightingRed=1.0
+LightingGreen=1.0
+LightingBlue=1.0
+AmbientRed=1.0
+AmbientGreen=1.0
+AmbientBlue=1.0
 
 ; Phase 4: overlap dedup. When on (default), Luma substitution is skipped for
 ; shaders DXHRVR already corrects per-eye (projected light/shadow via F3,

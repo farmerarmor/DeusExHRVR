@@ -11,36 +11,12 @@
 // Forward decl — LumaSettingsCB::Manager is defined in LumaSettingsCB.h.
 namespace LumaSettingsCB { class Manager; }
 
-// Per-eye injected render passes ported from Luma's ReShade-addon scheduling.
-//
-// Phase 2 swapped shaders in place (drop-in replacements). Phase 3 adds passes
-// Luma *injects* — whole new draw/dispatch calls that didn't exist in the
-// engine's pipeline. In Luma these run as draw-time overrides in
-// OnDrawOrDispatch; here they run from RenderStateHook at the same logical
-// moments, identified by the bound pixel shader's hash.
-//
-// Per-eye is automatic: the engine renders each eye's draws separately into
-// the double-height native stereo buffer, calling RenderStateHook per draw.
-// state[0x5ea] is the current eye (0/1). Injected passes read whatever RT/
-// depth the engine currently has bound (via OMGetRenderTargets, same as Luma),
-// so they operate on the current eye's slice naturally.
-//
-// Three passes, in scheduling order:
-//   1. XeGTAO (ambient occlusion): 4 compute dispatches, triggered when the
-//      engine's SSAO-generation draw fires. Replaces the game's SSAO with
-//      Intel XeGTAO. Reads depth + view-space normals; writes AO term into
-//      the alpha channel of the engine's normal RT (same slot the game uses).
-//   2. ModulateLighting: a custom pixel-shader pass on the lighting buffer,
-//      run once when materials rendering begins (the first draw on the
-//      swapchain RT after SSAO). Adjusts lighting color before materials
-//      composite against it.
-//   3. SMAA: replaces the game's MLAA. Runs when the engine's MLAA-mask draw
-//      fires. Linearizes the scene (CS), then runs SMAA edge-detect + blend
-//      weight + neighborhood-blend draws onto the swapchain RT.
-//
-// Each pass is independently toggleable ([Luma] XeGTAOEnable / SMAAEnable /
-// ModulateLightingEnable). All default off until tested.
-
+// Native per-eye effects scheduled from the engine render-state hook.
+// Captured DC path: SSAO generation provides depth and scene constants; its
+// following copy targets the full-sized normals texture. XeGTAO updates that
+// texture and suppresses color output from only the matching native copy.
+// Lighting color modulation runs before materials consume the lighting buffer.
+// Both paths keep independent eye scheduling; SMAA remains unimplemented.
 class LumaPasses {
 public:
     // Compile (or load from .cso) the injected-pass shaders. Called once after
@@ -68,6 +44,7 @@ public:
     // Returns true if a pass ran. Uses the cached device/context from Load.
     // `eye` is state[0x5ea]?0:1 for logging.
     bool OnDraw(uint32_t frame, uint32_t hash, unsigned eye);
+    void RestoreDrawOverrides();
 
     bool Loaded() const { return loaded; }
 
@@ -88,6 +65,24 @@ public:
     void OnFrameStart();
 
 private:
+    struct EyeInputs {
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> depth;
+        Microsoft::WRL::ComPtr<ID3D11Resource> source;
+        Microsoft::WRL::ComPtr<ID3D11Buffer> scene;
+        bool pending{};
+        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> lighting;
+        bool lightingDone{};
+    } eyes[2];
+    struct ComputeTarget {
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
+        Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> uav;
+    } aoMain, aoDenoised, aoOutput, depthPyramid;
+    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> depthMips[5];
+    UINT aoWidth{}, aoHeight{};
+    bool sourceOverridden{};
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> savedCopyShader;
+    bool EnsureAoResources(UINT width, UINT height);
     bool loaded{false};
     bool xegtaoEnabled{false};
     bool smaaEnabled{false};

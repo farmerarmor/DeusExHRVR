@@ -4,6 +4,8 @@ Experimental VR mod for **Deus Ex: Human Revolution — Director's Cut**, using 
 
 Gameplay stereo, headset tracking, HUD alignment, motion-controlled weapon aiming, controller buttons, and selectable interaction/walking directions have been tested in-headset. Automatic widescreen menus and several lighting, shadow and sky corrections are included. This remains an experimental prerelease; weapon visibility at extreme viewing angles and untested missions/effects still need broader testing.
 
+Current source also includes the SteamVR OpenXR sRGB compatibility fix, controller menu chords, and optional immersive sniper scope. The imported Luma lighting/color work remains experimental and disabled by default. XeGTAO is disabled following headset flicker and performance regressions. Roomscale body movement is not implemented.
+
 ## Download and install
 
 Download the packaged build from [Releases](https://github.com/farmerarmor/DeusExHRVR/releases). GitHub's automatic source ZIP does not contain compiled DLLs.
@@ -71,6 +73,8 @@ Set `LockVerticalCamera=1` under `[VR]` in `DeusExHRVR.ini` to keep mouse/gamepa
 
 Set `MotionControls=0` under `[VR]` to disable all motion-controller features, including controller tracking, the weapon experiment, and controller-based interaction/walking. Headset VR and `Headset` direction settings stay available; `Controller` directions fall back to native mouse/gamepad direction. `MotionControls=1` enables controller features selected by the other settings and is the default for compatibility. Restart after changing it.
 
+`ImmersiveScope=1` optionally keeps native scoped weapons in full VR. With motion-controlled weapons enabled, raise the right controller near your eye and point forward to enter the scope; lower it to exit. The magnified view follows controller aim, using the rifle's firing line as a shared optical viewpoint for both eyes. `ScopeMagnification=4` controls zoom (1-12). This alignment has been tested in-headset with the sniper rifle. The default remains the automatic virtual screen (`ImmersiveScope=0`). Restart after changing these settings.
+
 `ExperimentalMotionControls=1` enables a right-controller weapon experiment when `MotionControls=1`. It moves the equipped gun's render pose and supplies the controller muzzle to the player's firing-direction calculation. Motion-controller buttons use the Xbox bindings below; keyboard/mouse and physical gamepad input also remain available. `ControllerHideArms=1` (default) hides the player's actor/arms mesh during controller aiming. It falls back to normal weapon handling in virtual-screen modes or when controller tracking is unavailable. `ControllerMuzzleForwardMetres` sets the muzzle distance ahead of the controller (default `0.25`). Restart after changing these options. This remains experimental; alignment, shot impacts and different weapon models need in-game verification.
 
 Motion-controller buttons emulate Xbox controller 1 when `MotionControls=1`; no virtual-controller driver is required. `ExperimentalMotionControls` controls the weapon pose separately. The mapping uses the game's default Xbox layout with Y and B exchanged:
@@ -89,6 +93,8 @@ Motion-controller buttons emulate Xbox controller 1 when `MotionControls=1`; no 
 | Right B | Y / holster or draw; hold for quick inventory |
 | Hold right-stick click + left stick | D-pad: up cloaking, down smart vision, left move silently, right Typhoon |
 | Left menu: release before 1.5 seconds | Back / in-game menu |
+| Hold right stick click + left X | Back / in-game menu |
+| Hold right stick click + left Y | Start / pause menu |
 | Left menu: hold at least 1.5 seconds | Start / pause menu, once per hold |
 
 While right-stick click is held, the left stick sends only D-pad input. Diagonals choose the dominant direction. A quick right-stick click under 350ms still toggles scope on release if no D-pad direction was used; a longer hold sends no scope click. Menu short presses are delayed until release so a long press opens only pause. Tracking/focus loss releases the emulated inputs. `MotionControls=0` disables button emulation together with all other controller features; restart to apply. Native rumble is not yet mapped to VR haptics. F8 includes a private input diagnostic log.

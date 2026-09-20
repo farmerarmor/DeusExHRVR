@@ -24,11 +24,13 @@ static const float DevelopmentVerticalResolution = 1080.0;
 #endif
 
 #ifndef XE_GTAO_GENERATE_NORMALS
-#define XE_GTAO_GENERATE_NORMALS 0
+// Reconstruct in the same per-eye view space as the depth. The engine's
+// encoded normals retain its camera basis, which can differ from tracked VR.
+#define XE_GTAO_GENERATE_NORMALS 1
 #endif
 
 #ifndef XE_GTAO_QUALITY
-#define XE_GTAO_QUALITY 2
+#define XE_GTAO_QUALITY 0
 #endif
 
 #endif // SRC_GAME_SETTINGS_HLSL

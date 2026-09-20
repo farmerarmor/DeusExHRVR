@@ -80,6 +80,7 @@ constexpr uint32_t kSlot = 13;
 // Manager: creates the dynamic cbuffer, updates it, binds it.
 class Manager {
 public:
+    Manager() { SetDefaults(); }
     // Create the cbuffer. Call once after the device is available.
     void Init(ID3D11Device* dev) {
         if (buffer || !dev) return;
@@ -176,8 +177,8 @@ private:
         if (SUCCEEDED(ctx->Map(buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
             memcpy(mapped.pData, &settings, sizeof(settings));
             ctx->Unmap(buffer.Get(), 0);
+            dirty = false;
         }
-        dirty = false;
     }
     LumaSettings settings{};
     Microsoft::WRL::ComPtr<ID3D11Buffer> buffer;

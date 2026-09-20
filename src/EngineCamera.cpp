@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <intrin.h>
+#include "ImmersiveScope.h"
 
 // Supported executable only. All preferred addresses are rebased for ASLR.
 // F6 toggles tracking. Camera poses are attached to the scene and then to the
@@ -36,6 +37,12 @@ Transport::Header* channel{};
 Transport::TrackingReader trackingReader;
 bool requested=true,referenceValid{},recenterRequested{},f6Down{},f9Down{},f7Down{},effectsFix=true,f4Down{},eyeViewFix=true,f3Down{},instanceFix=true;
 bool interactionScreen{},scopeScreen{};
+bool immersiveScope{},immersiveScopeActive{};
+float scopeMagnification=4.f;
+ImmersiveScope::Gesture scopeGesture;
+std::atomic<uint64_t> scopePulseUntil{};
+uint64_t scopeToggleAfter{};
+bool autoScopeOwned{};
 bool lockVerticalCamera{};
 bool experimentalMotionControls{};
 bool motionControls=true;
@@ -255,6 +262,8 @@ CameraMath::Matrix RenderBase(const CameraMath::Matrix& game) {
 struct Snapshot {
     CameraMath::Matrix originalWorld,world,view,manager;
     Transport::Tracking tracking{};
+    Transport::Tracking presentationTracking{};
+    bool immersiveScoped{};
     uintptr_t managerAddress{};
     void* playerInstance{};
     uint32_t inputIndex=~0u;
@@ -574,6 +583,8 @@ LumaPasses lumaPasses; // Luma fix port: per-eye injected passes (XeGTAO/SMAA/Mo
 LumaSettingsCB::Manager lumaSettingsCB; // Luma fix port: LumaSettings cbuffer (b13)
 uint64_t instanceCorrections{};
 void __fastcall RenderStateHook(void* self,void*) {
+    lumaPasses.RestoreDrawOverrides();
+    shaderSwap.RestoreDrawOverrides();
     auto state=static_cast<unsigned char*>(self);
     float* instance{};CameraMath::Matrix saved;
     auto shader=effectShaders.Identify(*reinterpret_cast<uintptr_t*>(state+0x198));
@@ -622,6 +633,8 @@ void __fastcall RenderStateHook(void* self,void*) {
         }
     }
     originalRenderState(self);
+    if(effectsCapture && shaderSwap.Active())
+        shaderSwap.CaptureDraw(static_cast<uint32_t>(frameId.load()), lumaHash, state[0x5ea]?0:1);
     // Luma port: the engine has just bound its pixel shader. If substitution
     // is enabled (F12 or [Luma] SubstituteShaders=1) and this draw's PS has a
     // Luma replacement, override it now so the imminent draw uses the fix.
@@ -704,7 +717,28 @@ void __fastcall UpdateHook(void* self,void*) {
         weaponPose={};
         auto manager=static_cast<unsigned char*>(self);
         auto active=*reinterpret_cast<unsigned char**>(manager+0x30);
-        scopeScreen=ScreenMode::Scope(base,manager);
+        const bool nativeScope=ScreenMode::Scope(base,manager);
+        Transport::Tracking scopeTracking{};
+        const auto now=GetTickCount64();
+        bool scopeWeapon=false;
+        if(active==manager+0x6f0) {
+            auto entity=*reinterpret_cast<void**>(active+0xaa0);
+            using Equipped=unsigned char*(__cdecl*)(void*);
+            auto holder=entity?reinterpret_cast<Equipped>(base+0x66af40-0x400000)(entity):nullptr;
+            auto weapon=holder?*reinterpret_cast<unsigned char**>(holder+0x14):nullptr;
+            auto data=weapon?*reinterpret_cast<unsigned char**>(weapon+0x7c):nullptr;
+            scopeWeapon=data && data[0x425]!=0;
+        }
+        const bool scopeAllowed=immersiveScope && motionControls && experimentalMotionControls && requested &&
+            scopeWeapon && !(screenReasons&~16u) && !gameMenuOpen && trackingReader.Read(channel,scopeTracking,now);
+        const bool nearEye=scopeGesture.Update(scopeTracking,scopeAllowed,now);
+        if(scopeAllowed && now>=scopeToggleAfter && ((nearEye&&!nativeScope)||(!nearEye&&nativeScope&&autoScopeOwned))) {
+            scopePulseUntil=now+120;scopeToggleAfter=now+650;
+            autoScopeOwned=nearEye;
+        }
+        if(!scopeWeapon){autoScopeOwned=false;scopePulseUntil=0;}
+        immersiveScopeActive=scopeAllowed && nativeScope;
+        scopeScreen=nativeScope&&!immersiveScopeActive;
         // Supported build: PlayerCamera embeds CameraMode_Hacking at +0x430.
         // Its enter/leave methods (0x6a1c50 / 0x6a1dc0) set/clear +0x104.
         // Check the exact class before reading its active flag.
@@ -750,6 +784,13 @@ void __fastcall UpdateHook(void* self,void*) {
                 if(bobTrace)BobTrace(ms,current.originalWorld,renderBase.m+12,t);
             }
             current.world=CameraMath::HeadWorld(renderBase,reference,t.head,worldScale);
+            if(immersiveScopeActive) {
+                auto aim=CameraMath::HeadWorld(renderBase,reference,t.rightController.aim,worldScale);
+                // The native scoped weapon supplies its HUD/ADS behavior; its
+                // optical viewpoint lies on the same line as the controller muzzle.
+                current.world=aim;
+                for(int j=0;j<3;++j)current.world.m[12+j]+=aim.m[8+j]*controllerMuzzleForward*worldScale;
+            }
             current.view=CameraMath::InverseRigid(current.world);
             current.manager=CameraMath::Load(manager+0x13b0);
             auto oldView=CameraMath::Load(originalView(self));
@@ -767,7 +808,10 @@ void __fastcall UpdateHook(void* self,void*) {
                 for(int row=0;row<3;row++)current.manager.m[row*4+col]=current.view.m[row*4+col]*scale;
                 current.manager.m[12+col]+=(current.view.m[12+col]-oldView.m[12+col])*scale;
             }
-            current.tracking=t;current.active=true;current.managerAddress=reinterpret_cast<uintptr_t>(self);
+            current.presentationTracking=t;
+            current.immersiveScoped=immersiveScopeActive;
+            current.tracking=immersiveScopeActive?ImmersiveScope::Zoom(t,scopeMagnification):t;
+            current.active=true;current.managerAddress=reinterpret_cast<uintptr_t>(self);
             current.playerInstance=active==manager+0x6f0?*reinterpret_cast<void**>(active+0xaa0):nullptr;
             if(current.playerInstance && movementDirection!=DirectionConfig::Source::Mouse) {
                 using FindPlayer=unsigned char*(__cdecl*)(void*);
@@ -892,7 +936,7 @@ void __fastcall DrawHook(void* self,void*,uint32_t pass,void* other) {
     if(drawing.active && drawnEyes) {
         lastWorld=drawing;
         std::lock_guard lock(stateMutex);
-        if(pairInfo.mode==0){pairInfo.mode=1;pairInfo.tracking=drawing.tracking;}
+        if(pairInfo.mode==0){pairInfo.mode=1;pairInfo.tracking=drawing.immersiveScoped?drawing.presentationTracking:drawing.tracking;}
         if(pairInfo.tracking.id!=drawing.tracking.id)pairInfo.mode=2;
         pairInfo.eyeMask|=drawnEyes;
     }
@@ -1114,6 +1158,9 @@ void Install() {
     controllerHideArms=GetPrivateProfileIntW(L"VR",L"ControllerHideArms",1,config)!=0;
     interactionAim=DirectionConfig::Read(config,L"InteractionAim");
     movementDirection=DirectionConfig::Read(config,L"MovementDirection");
+    immersiveScope=GetPrivateProfileIntW(L"VR",L"ImmersiveScope",0,config)!=0;
+    GetPrivateProfileStringW(L"VR",L"ScopeMagnification",L"4",scaleText,32,config);
+    {float value=static_cast<float>(_wtof(scaleText));if(std::isfinite(value)&&value>=1&&value<=12)scopeMagnification=value;}
     GetPrivateProfileStringW(L"VR",L"ControllerMuzzleForwardMetres",L"0.25",scaleText,32,config);
     float muzzleForward=static_cast<float>(_wtof(scaleText));
     if(std::isfinite(muzzleForward) && muzzleForward>=0 && muzzleForward<=1)controllerMuzzleForward=muzzleForward;
@@ -1132,7 +1179,8 @@ void Install() {
         bool sub=GetPrivateProfileIntW(L"Luma",L"SubstituteShaders",0,config)!=0;
         shaderSwap.SetSubstitutionEnabled(sub);
         // Phase 3: injected-pass enables. All default off until tested.
-        lumaPasses.SetXeGTAOEnabled(GetPrivateProfileIntW(L"Luma",L"XeGTAOEnable",0,config)!=0);
+        // XeGTAO experiment withdrawn: retain the game's native AO.
+        lumaPasses.SetXeGTAOEnabled(false);
         lumaPasses.SetSMAAEnabled(GetPrivateProfileIntW(L"Luma",L"SMAAEnable",0,config)!=0);
         lumaPasses.SetModulateLightingEnabled(GetPrivateProfileIntW(L"Luma",L"ModulateLightingEnable",0,config)!=0);
         // LumaSettings cbuffer values. Defaults match Luma's DXHR main.cpp
@@ -1141,8 +1189,12 @@ void Install() {
         // in SetShaderSwapDevice, but setting values now is fine — SetDefaults
         // runs first, then these override before any bind happens).
         auto readFloat=[&](const wchar_t* key,float def)->float{
-            wchar_t buf[32];GetPrivateProfileStringW(L"Luma",key,nullptr,buf,32,config);
-            float v=_wtof(buf);return std::isfinite(v)?v:def;
+            wchar_t buf[32]{};
+            if (!GetPrivateProfileStringW(L"Luma",key,L"",buf,32,config)) return def;
+            wchar_t* end{};
+            float v=wcstof(buf,&end);
+            while (end && (*end==L' ' || *end==L'\t')) ++end;
+            return end!=buf && end && !*end && std::isfinite(v) && v>=0.0f && v<=10.0f ? v : def;
         };
         auto& gs=lumaSettingsCB.Get().GameSettings;
         gs.BloomIntensity=readFloat(L"BloomIntensity",0.8f);
@@ -1152,14 +1204,19 @@ void Install() {
         gs.AmbientLightingIntensity=readFloat(L"AmbientLightingIntensity",0.8f);
         gs.EmissiveIntensity=readFloat(L"EmissiveIntensity",0.667f);
         gs.HDRBoostIntensity=readFloat(L"HDRBoostIntensity",1.0f);
+        gs.LightingColor[0]=readFloat(L"LightingRed",1.0f);
+        gs.LightingColor[1]=readFloat(L"LightingGreen",1.0f);
+        gs.LightingColor[2]=readFloat(L"LightingBlue",1.0f);
+        gs.AmbientLightColor[0]=readFloat(L"AmbientRed",1.0f);
+        gs.AmbientLightColor[1]=readFloat(L"AmbientGreen",1.0f);
+        gs.AmbientLightColor[2]=readFloat(L"AmbientBlue",1.0f);
         lumaSettingsCB.MarkDirty();
         // Phase 4: overlap dedup. Default on — skip Luma substitution for
         // shaders DXHRVR already corrects per-eye (projected light/shadow via
         // F3, identified by EffectShader::UsesCentreViewMatrix).
         shaderSwap.SetDedupWithDXHRVR(GetPrivateProfileIntW(L"Luma",L"DedupWithDXHRVR",1,config)!=0);
-        // When XeGTAO is enabled, skip Luma's SSAO generation replacement
-        // (XeGTAO overwrites the result, so the substitution is wasted work).
-        if(GetPrivateProfileIntW(L"Luma",L"XeGTAOEnable",0,config)!=0) {
+        // Always retain native ambient occlusion.
+        {
             shaderSwap.AddSkipHash(0xD44718C4u); // GenerateAmbientOcclusion (DC)
             shaderSwap.AddSkipHash(0x7A054979u); // GenerateAmbientOcclusion (OG)
         }
@@ -1217,6 +1274,7 @@ Transport::RenderInfo OnPresent(uint64_t frame,bool capture) {
                 controllerDraws.load(),controllerMuzzles.load(),controllerAimQueries.load(),controllerHiddenArms.load(),weaponPose.owner,
                 controllerAttachments.load(),controllerBounds.load());
             Matrix(motion,"controllerMuzzle",weaponPose.muzzle.m);
+            fprintf(motion,"immersiveScope enabled=%d active=%d owned=%d zoom=%g\n",immersiveScope,immersiveScopeActive,autoScopeOwned,scopeMagnification);
             fprintf(motion,"directions interaction=%s movement=%s interactionQueries=%llu movementAxes=%llu motionControls=%d inputIndex=%u actions=%p/%p lastInput=%g,%g lastOutput=%g,%g heading=%g\n",
                 DirectionConfig::Name(interactionAim),DirectionConfig::Name(movementDirection),
                 interactionQueries.load(),movementAxes.load(),motionControls,current.inputIndex,walkAction.load(),strafeAction.load(),
@@ -1258,7 +1316,10 @@ Transport::RenderInfo OnPresent(uint64_t frame,bool capture) {
     // via [Luma] SubstituteShaders=1). Lets you A/B the swap in-headset without
     // restarting. Matches the existing F3/F4/F7 toggle pattern.
     bool f12=(GetAsyncKeyState(VK_F12)&0x8000)!=0;
-    if(f12&&!f12Down){bool on=ToggleShaderSubstitution();FILE* f{};if(!fopen_s(&f,"DeusExHRVR-effects.log","a")){fprintf(f,"lumaSubstitute=%d frame=%llu\n",on,frame);fclose(f);}}f12Down=f12;
+    if(f12&&!f12Down && !(GetAsyncKeyState(VK_CONTROL)&0x8000)){
+        bool on=ToggleShaderSubstitution();
+        FILE* f{};if(!fopen_s(&f,"DeusExHRVR-effects.log","a")){fprintf(f,"lumaSubstitute=%d frame=%llu\n",on,frame);fclose(f);}
+    }f12Down=f12;
     if(f6&&!f6Down){requested=!requested;referenceValid=false;current.active=false;}
     if(f9&&!f9Down)recenterRequested=true;
     if((f6&&!f6Down)||(f9&&!f9Down)) {
@@ -1303,10 +1364,10 @@ void SetShaderSwapDevice(ID3D11Device* device){
         // ShaderSwap (Phase 2) and LumaPasses (Phase 3) can bind it at b13
         // before their shaders run.
         lumaSettingsCB.Init(device);
-        lumaSettingsCB.SetDefaults();
         shaderSwap.SetLumaSettingsCB(&lumaSettingsCB);
         lumaPasses.SetLumaSettingsCB(&lumaSettingsCB);
     }
 }
+bool ImmersiveScopeButton(){return GetTickCount64()<scopePulseUntil.load();}
 bool ToggleShaderSubstitution(){bool on=!shaderSwap.SubstitutionEnabled();shaderSwap.SetSubstitutionEnabled(on);return on;}
 }

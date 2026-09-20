@@ -63,6 +63,8 @@ public:
     // EffectShader's cache), so the expensive ReadProcessMemory + CRC32 runs
     // at most once per unique shader object, not once per draw.
     uint32_t NoteBound(uint32_t frame, Stage stage, uintptr_t engineShader);
+    void CaptureDraw(uint32_t frame, uint32_t hash, unsigned eye);
+    void RestoreDrawOverrides();
 
     // True if `hash` has a table entry for the given stage.
     bool IsKnown(Stage stage, uint32_t hash) const;
@@ -151,6 +153,9 @@ private:
     // substitution state (render-thread only; SetDevice/SetSubstitutionEnabled
     // are called from the render thread too)
     bool substituteEnabled{false};
+    bool drawOverridden{};
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> savedShader;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> savedSettings;
     Microsoft::WRL::ComPtr<ID3D11Device> device;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     // Optional LumaSettings cbuffer manager (set via SetLumaSettingsCB).

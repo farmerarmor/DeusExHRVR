@@ -13,6 +13,7 @@ inline int16_t Stick(float v){return static_cast<int16_t>(std::lround(std::clamp
 inline uint8_t Trigger(float v){return static_cast<uint8_t>(std::lround(std::clamp(Finite(v),0.f,1.f)*255));}
 class Mapper {
     bool menuDown{},longMenu{},rightDown{},dpadUsed{};
+    bool consumedX{},consumedY{};
     uint64_t menuStart{},rightStart{},backUntil{},startUntil{},scopeUntil{},lastTick{};
 public:
     void Reset(){*this={};}
@@ -25,12 +26,19 @@ public:
         out.leftTrigger=Trigger(in.leftTrigger);out.rightTrigger=Trigger(in.rightTrigger);
         auto button=[&](bool on,uint16_t bit){if(on)out.buttons|=bit;};
         button(in.a,XINPUT_GAMEPAD_A);button(in.b,XINPUT_GAMEPAD_Y);
-        button(in.x,XINPUT_GAMEPAD_X);button(in.y,XINPUT_GAMEPAD_B);
+        if(!in.x)consumedX=false;
+        if(!in.y)consumedY=false;
+        if(in.rightClick){consumedX|=in.x;consumedY|=in.y;}
+        button(in.x&&!consumedX,XINPUT_GAMEPAD_X);
+        button(in.y&&!consumedY,XINPUT_GAMEPAD_B);
         button(in.leftGrip>.5f,XINPUT_GAMEPAD_LEFT_SHOULDER);
         button(in.rightGrip>.5f,XINPUT_GAMEPAD_RIGHT_SHOULDER);
         button(in.leftClick,XINPUT_GAMEPAD_LEFT_THUMB);
         if(in.rightClick && !rightDown){rightStart=now;dpadUsed=false;}
         if(in.rightClick) {
+            button(in.x,XINPUT_GAMEPAD_BACK);
+            button(in.y,XINPUT_GAMEPAD_START);
+            if(in.x || in.y){dpadUsed=true;scopeUntil=0;}
             // Four cardinal choices prevent diagonal stick motion from firing
             // two augmentations. The modifier always consumes walking axes.
             out.leftX=out.leftY=0;

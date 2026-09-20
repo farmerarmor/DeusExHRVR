@@ -10,8 +10,37 @@
 void Check(bool value,const char* name){if(!value){fprintf(stderr,"FAIL %s\n",name);std::exit(1);}}
 bool Near(float a,float b){return std::abs(a-b)<0.0001f;}
 #include "GamepadChecks.h"
+#include "ImmersiveScope.h"
 int main(int argc,char** argv) {
     CheckGamepadMapping();
+    {
+        ImmersiveScope::Gesture gesture;Transport::Tracking t{};
+        t.valid=1;t.rightController.valid=1;t.head.orientation.w=t.rightController.aim.orientation.w=1;
+        t.rightController.aim.position={.06f,-.08f,-.18f};t.tick=100;
+        Check(!gesture.Update(t,true,100),"scope gesture requires dwell");
+        t.tick=260;Check(gesture.Update(t,true,260),"scope enters with aligned controller near eye");
+        t.rightController.aim.position.z=-.34f;t.tick=280;
+        Check(gesture.Update(t,true,280),"scope exit hysteresis prevents threshold chatter");
+        t.rightController.aim.position.z=-.5f;t.tick=300;
+        Check(!gesture.Update(t,true,300),"scope exits when rifle lowered");
+        t.rightController.aim.position.z=-.18f;t.tick=400;gesture.Update(t,true,400);
+        Check(!gesture.Update(t,true,700),"stale tracking cannot activate scope");
+        for(auto& eye:t.eyes){eye.pose.orientation.w=1;eye.left=-.7f;eye.right=.8f;eye.up=.75f;eye.down=-.65f;}
+        t.head.position={1,2,3};t.eyes[0].pose.position={.968f,2,3};t.eyes[1].pose.position={1.032f,2,3};
+        auto zoomed=ImmersiveScope::Zoom(t,4);
+        for(unsigned eye=0;eye<2;++eye){auto optical=CameraMath::EyeWorld(zoomed,eye,300);
+            Check(Near(optical.m[12],0)&&Near(optical.m[13],0)&&Near(optical.m[14],0),"scope eyes share firing origin");}
+        for(unsigned eye=0;eye<2;++eye){
+            CameraMath::Matrix depth{};depth.m[10]=1;depth.m[14]=-.1f;
+            auto projection=CameraMath::EyeProjection(depth,zoomed,eye,300);
+            auto hud=CameraMath::HudClipTransform(zoomed,eye);
+            for(float distance:{300.f,3000.f,30000.f})for(int axis:{0,1})
+                Check(Near((projection.m[8+axis]*distance+projection.m[12+axis])/distance,hud.m[12+axis]/hud.m[15]),"scope reticle follows firing ray at every distance in both eyes");
+        }
+        Check(Near(t.eyes[0].pose.position.x,.968f),"scope does not change physical eye poses");
+        Check(Near(std::tan(zoomed.eyes[0].left)*4,std::tan(t.eyes[0].left)),"scope scales asymmetric frustum tangents");
+        Check(t.eyes[0].left==-.7f,"scope leaves compositor frustum unchanged");
+    }
     {
         SceneCache<uint64_t> scenes;
         for(uintptr_t i=1;i<=5000;i++)scenes.Store(reinterpret_cast<void*>(i),42,10);
