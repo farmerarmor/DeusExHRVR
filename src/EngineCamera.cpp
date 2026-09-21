@@ -248,6 +248,10 @@ struct SwayHold {
     int windowMs{};                      // [VR] SideSwayHoldMs; 0 = off
     static constexpr float limit=45.f;   // game units (15 cm)
     static constexpr float rate=150.f;   // how fast the correction eases out, units/s
+    // Never more than 4 cm from the game's camera, so deliberate camera moves
+    // (cover, pull-backs) can't lag behind. Running corrections stay under it:
+    // 99th percentile 3.4 cm; the cap binds on 0.2% of running frames.
+    static constexpr float cap=12.f;
     struct Sample {double t;float x,y;};
     std::array<Sample,512> ring{};size_t head{},size{};
     double sumX{},sumY{},lastT{};float cx{},cy{},lastX{},lastY{};bool have{};
@@ -272,6 +276,7 @@ struct SwayHold {
         if(inside && d<=step*4){cx=tx;cy=ty;}
         else if(d>step && d>0){cx+=ex/d*step;cy+=ey/d*step;}
         else {cx=tx;cy=ty;}
+        if(float m=std::hypot(cx,cy);m>cap){cx*=cap/m;cy*=cap/m;}
         camX+=cx;camY+=cy;
         lastT=now;lastX=dx;lastY=dy;have=true;
     }
