@@ -176,6 +176,9 @@ struct Bridge {
         wchar_t config[MAX_PATH]{};GetFullPathNameW(L"DeusExHRVR.ini",MAX_PATH,config,nullptr);
         levelScreen=GetPrivateProfileIntW(L"VR",L"LevelScreen",1,config)!=0;
         Log("Virtual screen placement: %s",levelScreen?"level (LevelScreen=1)":"follows head tilt (LevelScreen=0)");
+        int leftClickDelay=std::clamp(static_cast<int>(GetPrivateProfileIntW(L"VR",L"LeftStickClickDelayMs",150,config)),0,1000);
+        controller.SetLeftClickDelayMs(static_cast<uint64_t>(leftClickDelay));
+        Log("Left stick click delay: %d ms (LeftStickClickDelayMs)",leftClickDelay);
         if(trackingChannel && DirectionConfig::MotionEnabled(config)) {
             bool ok=controller.Init(instance,session);Log("Motion controller aim and Xbox buttons: %s",ok?"ready":"unavailable; native input retained");
             if(!ok)controller.Reset();

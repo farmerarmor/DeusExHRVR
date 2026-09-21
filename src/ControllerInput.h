@@ -19,6 +19,7 @@ public:
         for(auto& a:action)a=XR_NULL_HANDLE;
         mapper.Reset();
     }
+    void SetLeftClickDelayMs(uint64_t ms){mapper.SetLeftClickDelay(ms);}
     bool Init(XrInstance instance,XrSession session) {
         XrActionSetCreateInfo set{XR_TYPE_ACTION_SET_CREATE_INFO};
         strcpy_s(set.actionSetName,"motion_controller");strcpy_s(set.localizedActionSetName,"VR gamepad and weapon");

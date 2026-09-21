@@ -16,8 +16,12 @@ class Mapper {
     bool consumedX{},consumedY{},calibrationChord{},leftDown{};
     uint64_t leftStart{},leftUntil{};
     uint64_t menuStart{},rightStart{},backUntil{},startUntil{},scopeUntil{},lastTick{};
+    uint64_t leftClickDelay=150; // setting, not state: survives Reset()
 public:
-    void Reset(){*this={};}
+    void Reset(){auto delay=leftClickDelay;*this={};leftClickDelay=delay;}
+    // [VR] LeftStickClickDelayMs: 0 sends the left click at once. Layouts that
+    // move crouch off the left click don't need the calibration-chord guard.
+    void SetLeftClickDelay(uint64_t ms){leftClickDelay=ms;}
     Transport::Gamepad Update(const Input& in,uint64_t now) {
         Transport::Gamepad out{};
         if(!in.active || (lastTick && now<lastTick)){Reset();return out;}
@@ -43,9 +47,9 @@ public:
         button(in.rightGrip>.5f,XINPUT_GAMEPAD_RIGHT_SHOULDER);
         // A short grace period prevents crouch when the two clicks arrive apart.
         if(in.leftClick&&!leftDown)leftStart=now;
-        if(!in.leftClick&&leftDown&&now-leftStart<150)leftUntil=now+120;
+        if(!in.leftClick&&leftDown&&now-leftStart<leftClickDelay)leftUntil=now+120;
         leftDown=in.leftClick;
-        button((in.leftClick&&now-leftStart>=150)||now<leftUntil,XINPUT_GAMEPAD_LEFT_THUMB);
+        button((in.leftClick&&now-leftStart>=leftClickDelay)||now<leftUntil,XINPUT_GAMEPAD_LEFT_THUMB);
         if(in.rightClick && !rightDown){rightStart=now;dpadUsed=false;}
         if(in.rightClick) {
             button(in.x,XINPUT_GAMEPAD_BACK);

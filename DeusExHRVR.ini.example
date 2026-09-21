@@ -19,6 +19,11 @@ MotionControls=1
 ImmersiveScope=0
 ScopeMagnification=4
 
+; Left thumbstick click waits this long (ms) before a hold registers, so the
+; two-stick weapon calibration chord doesn't also crouch. 0 sends it at once,
+; for layouts that map the left click to something other than crouch.
+LeftStickClickDelayMs=150
+
 ; Independent directions: Mouse, Headset, or Controller (right-hand aim).
 ; Mouse retains native mouse/gamepad look direction. Restart after editing.
 ; Interaction selects doors/items; it does not change weapon aiming.
