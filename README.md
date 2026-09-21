@@ -172,7 +172,7 @@ Inputs are `RightA`, `RightB`, `LeftX`, `LeftY`, `LeftGrip`, `RightGrip`, `LeftS
 
 The turn is one injected relative mouse move, which avoids the stick's acceleration ramp. `SnapTurnMouseCounts` is the size of that move; the mod measures the resulting heading change after each snap and writes a corrected value back to the INI, so it self-calibrates within a few turns from any starting value. The game appears to ignore mouse look while the gamepad left stick is deflected, so walking is released for up to `SnapTurnPauseMs` (default 60) around the injected move and resumed as soon as the camera has visibly turned.
 
-With `SnapTurn=1`, the right stick's vertical axis is free, so `RightStickUp` and `RightStickDown` under `[Buttons]` can hold a button while the stick is pushed within 30 degrees of vertical (for example `RightStickUp=A` to jump and `RightStickDown=LS` to crouch).
+`RightStickUp` and `RightStickDown` under `[Buttons]` can hold a button while the right stick is pushed within 30 degrees of vertical during gameplay (for example `RightStickUp=A` to jump and `RightStickDown=LS` to crouch). This gives up vertical stick aiming, which you don't need when aiming with the controller (`ExperimentalMotionControls=1`). It works with snap turn or smooth turn. With `SnapTurn=0`, setting either key takes the stick's vertical axis for these buttons and leaves the horizontal axis for smooth turning; a push inside the 30-degree cone also holds the turn, so jumping or crouching doesn't drift the view. Menus, terminals and the scope keep the native right stick.
 
 ## Restore the original game
 

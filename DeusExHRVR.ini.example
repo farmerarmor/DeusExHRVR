@@ -95,8 +95,9 @@ SnapTurnMouseCounts=300
 ; The game ignores mouse look while the left stick is deflected, so walking is
 ; released for at most this long around the injected move.
 SnapTurnPauseMs=60
-; With SnapTurn=1 the right stick's vertical axis is free: RightStickUp and
-; RightStickDown under [Buttons] hold a target while it is pushed up or down.
+; RightStickUp and RightStickDown under [Buttons] hold a target while the right
+; stick is pushed up or down during gameplay. With SnapTurn=0, setting either one
+; takes the stick's vertical axis for them; smooth turning keeps the horizontal.
 
 ; Optional button layout. [Buttons] applies to gameplay and scoped aiming,
 ; [ScreenButtons] to everything else: the title and pause menus, the in-game

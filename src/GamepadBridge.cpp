@@ -54,7 +54,7 @@ bool remapActive{};
 // terminals, hacking, videos, game over, loading screens).
 uint32_t screenTarget[buttonCount]{};uint32_t screenLeftTrigger=TargetLT,screenRightTrigger=TargetRT;
 bool screenRemapActive{};
-uint32_t stickUpTarget{},stickDownTarget{}; // right stick up/down during gameplay (needs SnapTurn=1)
+uint32_t stickUpTarget{},stickDownTarget{}; // right stick up/down during gameplay (snap or smooth turn)
 
 uint32_t ParseTarget(const wchar_t* key,uint32_t fallback,const wchar_t* section=L"Buttons") {
     wchar_t value[32]{};GetPrivateProfileStringW(section,key,L"",value,32,configPath);
@@ -268,6 +268,23 @@ void SnapTurn(XINPUT_GAMEPAD& pad) {
     inject();
 }
 
+// Without snap turn the right stick normally reaches the game untouched. When
+// RightStickUp or RightStickDown is set, gameplay keeps the horizontal axis for
+// smooth turning and gives the vertical axis to those buttons, with the same
+// 30-degree cone as snap turn. A push inside the cone also holds the turn, so a
+// jump or crouch doesn't drift the view.
+void StickButtons(XINPUT_GAMEPAD& pad) {
+    float yaw=0;
+    if(!EngineCamera::SnapTurnView(yaw))return; // menus/terminals/scope keep the native right stick
+    double rx=pad.sThumbRX/32767.,ry=pad.sThumbRY/32767.;
+    double magnitude=std::hypot(rx,ry);
+    pad.sThumbRY=0;
+    if(magnitude>=.6 && std::abs(ry)>=magnitude*.866) {
+        pad.sThumbRX=0;
+        auto target=ry>0?stickUpTarget:stickDownTarget;
+        if(target)Emit(pad,target,true,BYTE(255));
+    }
+}
 bool Read(XINPUT_GAMEPAD& pad) {
     if(!enabled || !channel)return false;
     Transport::Tracking sample{};
@@ -288,6 +305,7 @@ bool Read(XINPUT_GAMEPAD& pad) {
         ApplyButtons(pad);
         if(EngineCamera::ImmersiveScopeButton())pad.wButtons|=XINPUT_GAMEPAD_RIGHT_THUMB;
         if(snapEnabled)SnapTurn(pad);
+        else if(stickUpTarget || stickDownTarget)StickButtons(pad);
     }
     // Keep the device connected after first activation, but release every
     // button/axis on focus loss, sleeping controllers or a stalled companion.
