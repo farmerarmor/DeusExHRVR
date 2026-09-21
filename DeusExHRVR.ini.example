@@ -121,8 +121,8 @@ SnapTurnHideQuickBar=1
 ; LeftGrip, RightGrip, LeftStickClick, RightStickClick, LeftTrigger,
 ; RightTrigger. Targets: A B X Y LB RB LS RS LT RT Back Start DPadUp DPadDown
 ; DPadLeft DPadRight QuickSave None. QuickSave presses F5, the game's quicksave
-; key, which has no gamepad binding. <Input>HoldMs=250 delays the target until the input
-; has been held that long; with a delay set, <Input>Tap=A sends a short pulse
+; key, which has no gamepad binding. <Input>HoldMs=250 delays the target until
+; the input has been held that long; with a delay set, <Input>Tap=A sends a short pulse
 ; when the input is released early.
 [Buttons]
 
