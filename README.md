@@ -154,6 +154,21 @@ The filter reports the time-average of the heading over the last window, extrapo
 
 `BobTrace=1` writes one line per frame to `DeusExHRVR-bob.csv` (camera position and heading, stick input, head pose; capped at 36000 lines) for measuring the walk animation on other hardware. The values above came from such a trace of walking and sprinting in the first hub. Tracing costs frame time - leave it at `0` for play.
 
+`SnapTurn=1` under `[VR]` replaces the right stick's smooth camera turn during gameplay with a snap turn. A flick within 60 degrees of horizontal turns the view instantly by `SnapTurnDegrees` (default 30); the stick must return near center before the next flick. Menus, terminals and scoped aiming keep the native right stick.
+
+The turn is one injected relative mouse move, which avoids the stick's acceleration ramp. `SnapTurnMouseCounts` is the size of that move; the mod measures the resulting heading change after each snap and writes a corrected value back to the INI, so it self-calibrates within a few turns from any starting value. The game appears to ignore mouse look while the gamepad left stick is deflected, so walking is released for up to `SnapTurnPauseMs` (default 60) around the injected move and resumed as soon as the camera has visibly turned.
+
+The injected mouse move also brings up the game's keyboard-and-mouse quickbar (the PC item bar). The game's own quickbar auto-hide, the setting the tilde key toggles, keeps it hidden, so with `SnapTurn=1` the mod turns it on whenever gameplay starts. The setting is checked against the supported build before it is changed. `SnapTurnHideQuickBar=0` leaves it to you.
+
+### Remapping buttons
+
+To change what a motion-controller input sends:
+
+1. Open `DeusExHRVR.ini` beside `DXHRDC.exe` (copy `DeusExHRVR.ini.example` there first if you don't have one).
+2. Add a `[Buttons]` section for gameplay, a `[ScreenButtons]` section for everything else, or both.
+3. Under it, add one line per input you want to change, in the form `Input=Target`, for example `LeftGrip=Y`.
+4. Save the file and restart the game.
+
 Motion-controller buttons can be remapped in `DeusExHRVR.ini` without touching the game's own bindings. `[Buttons]` applies during gameplay and scoped aiming; `[ScreenButtons]` applies to everything else: the title and pause menus, the in-game menu (map, objectives, inventory), the e-reader and news reader, terminals, hacking, videos, game over and loading screens, where one-handed use and a different Select/Back pairing are often easier. Any input not listed keeps the stock layout above. The in-game menu and the readers stay in tracked VR (snap turn still works over a reader); only their buttons follow `[ScreenButtons]`.
 
 ```ini
@@ -170,13 +185,7 @@ LeftTrigger=LT
 RightTrigger=RT
 ```
 
-Inputs are `RightA`, `RightB`, `LeftX`, `LeftY`, `LeftGrip`, `RightGrip`, `LeftStickClick`, `RightStickClick`, `LeftTrigger`, `RightTrigger`. Targets are `A`, `B`, `X`, `Y`, `LB`, `RB`, `LS`/`L3`, `RS`/`R3`, `LT`, `RT`, `Back`, `Start`, `DPadUp`, `DPadDown`, `DPadLeft`, `DPadRight`, or `None`. Triggers may be mapped to buttons and buttons to triggers. `<Input>HoldMs=250` makes that input send its target only after it has been held that long, so accidental taps send nothing; with a hold delay set, `<Input>Tap=A` sends a different target as a 120 ms pulse when the input is released early. Unrecognized names are logged and ignored. Restart after editing.
-
-`SnapTurn=1` under `[VR]` replaces the right stick's smooth camera turn during gameplay with a snap turn. A flick within 60 degrees of horizontal turns the view instantly by `SnapTurnDegrees` (default 30); the stick must return near center before the next flick. Menus, terminals and scoped aiming keep the native right stick.
-
-The turn is one injected relative mouse move, which avoids the stick's acceleration ramp. `SnapTurnMouseCounts` is the size of that move; the mod measures the resulting heading change after each snap and writes a corrected value back to the INI, so it self-calibrates within a few turns from any starting value. The game appears to ignore mouse look while the gamepad left stick is deflected, so walking is released for up to `SnapTurnPauseMs` (default 60) around the injected move and resumed as soon as the camera has visibly turned.
-
-The injected mouse move also brings up the game's keyboard-and-mouse quickbar (the PC item bar). The game's own quickbar auto-hide, the setting the tilde key toggles, keeps it hidden, so with `SnapTurn=1` the mod turns it on whenever gameplay starts. The setting is checked against the supported build before it is changed. `SnapTurnHideQuickBar=0` leaves it to you.
+Inputs are `RightA`, `RightB`, `LeftX`, `LeftY`, `LeftGrip`, `RightGrip`, `LeftStickClick`, `RightStickClick`, `LeftTrigger`, `RightTrigger`, plus `RightStickUp` and `RightStickDown` in `[Buttons]` (below). Targets are `A`, `B`, `X`, `Y`, `LB`, `RB`, `LS`/`L3`, `RS`/`R3`, `LT`, `RT`, `Back`, `Start`, `DPadUp`, `DPadDown`, `DPadLeft`, `DPadRight`, or `None`. Triggers may be mapped to buttons and buttons to triggers. `<Input>HoldMs=250` makes that input send its target only after it has been held that long, so accidental taps send nothing; with a hold delay set, `<Input>Tap=A` sends a different target as a 120 ms pulse when the input is released early. Unrecognized names are logged and ignored. Restart after editing. The left menu button is not remappable: a tap sends Back (in-game menu) and a hold of 1.5 seconds sends Start (pause), as in the table above.
 
 `RightStickUp` and `RightStickDown` under `[Buttons]` can hold a button while the right stick is pushed within 30 degrees of vertical during gameplay (for example `RightStickUp=A` to jump and `RightStickDown=LS` to crouch). This gives up vertical stick aiming, which you don't need when aiming with the controller (`ExperimentalMotionControls=1`). It works with snap turn or smooth turn. With `SnapTurn=0`, setting either key takes the stick's vertical axis for these buttons and leaves the horizontal axis for smooth turning; a push inside the 30-degree cone also holds the turn, so jumping or crouching doesn't drift the view. Menus, terminals and the scope keep the native right stick.
 
