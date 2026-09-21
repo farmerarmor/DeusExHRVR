@@ -105,6 +105,10 @@ SnapTurnMouseCounts=300
 ; The game ignores mouse look while the left stick is deflected, so walking is
 ; released for at most this long around the injected move.
 SnapTurnPauseMs=60
+; Snap turn's mouse move brings up the PC quickbar. 1 turns on the game's own
+; quickbar auto-hide (the tilde key) whenever gameplay starts; 0 leaves that
+; setting alone.
+SnapTurnHideQuickBar=1
 ; RightStickUp and RightStickDown under [Buttons] hold a target while the right
 ; stick is pushed up or down during gameplay. With SnapTurn=0, setting either one
 ; takes the stick's vertical axis for them; smooth turning keeps the horizontal.

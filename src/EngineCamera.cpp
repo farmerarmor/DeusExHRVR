@@ -1444,6 +1444,27 @@ bool SnapTurnView(float& yaw) {
     yaw=std::atan2(current.originalWorld.m[9],current.originalWorld.m[8]);
     return std::isfinite(yaw);
 }
+// Local patch (snap turn): the game's own quickbar auto-hide, g_quickBarAutoHide,
+// the setting the tilde key toggles. The registration at 0xa68190 passes the
+// value's address (0x01c79eb8) to the setting's constructor, which keeps it at
+// +0x104 of the setting object (0x01c7bb60) and writes the default there; the
+// game's own setter writes that one byte. All of it is checked before touching
+// anything. Returns the value found (before setting it, if asked), or -1 when
+// the layout doesn't match.
+int QuickBarAutoHide(bool set) {
+    if(!base)return -1;
+    auto code=reinterpret_cast<const unsigned char*>(VA(0xa68190));
+    auto dword=[&](size_t at){uint32_t v;memcpy(&v,code+at,4);return uintptr_t(v);};
+    static const unsigned char pushes[]={0x6a,0x01,0x6a,0x00,0x6a,0x00,0x68}; // push 1; push 0; push 0; push value
+    auto value=VA(0x01c79eb8),object=VA(0x01c7bb60),name=VA(0xaa4004);
+    if(memcmp(code,pushes,sizeof(pushes)) || dword(7)!=value || code[11]!=0x68 || dword(12)!=name ||
+        code[16]!=0xb9 || dword(17)!=object || strcmp(reinterpret_cast<const char*>(name),"g_quickBarAutoHide") ||
+        *reinterpret_cast<const uintptr_t*>(object+0x104)!=value)return -1;
+    auto flag=reinterpret_cast<volatile unsigned char*>(value);
+    int found=*flag;
+    if(set && !found)*flag=1;
+    return found;
+}
 
 void SetShaderSwapDevice(ID3D11Device* device){
     shaderSwap.SetDevice(device);

@@ -170,8 +170,10 @@ int snapDir{},snapMisses{};
 uint64_t snapAt{},snapCooldown{},snapCount{},snapHoldUntil{};
 int snapPauseMs=60;
 bool snapHoldAdaptive{};float snapHoldYaw{};uint64_t snapHoldStart{};
+bool snapHideQuickBar{},quickBarPending=true,quickBarFailed{},quickBarLogged{};
 void LoadSnap() {
     snapEnabled=GetPrivateProfileIntW(L"VR",L"SnapTurn",0,configPath)!=0;
+    snapHideQuickBar=GetPrivateProfileIntW(L"VR",L"SnapTurnHideQuickBar",1,configPath)!=0;
     wchar_t text[32]{};
     GetPrivateProfileStringW(L"VR",L"SnapTurnDegrees",L"30",text,32,configPath);
     float degrees=static_cast<float>(_wtof(text));
@@ -183,7 +185,18 @@ void LoadSnap() {
     // deflected, so walking is released until the injected turn shows up.
     snapPauseMs=std::clamp(static_cast<int>(GetPrivateProfileIntW(L"VR",L"SnapTurnPauseMs",60,configPath)),0,500);
     // SnapTurnPauseMs is the maximum; the pause ends as soon as the turn is seen.
-    InputLog("snapTurn enabled=%d degrees=%.1f mouseCounts=%.0f pauseMs=%d",snapEnabled,snapDegrees,snapCounts,snapPauseMs);
+    InputLog("snapTurn enabled=%d degrees=%.1f mouseCounts=%.0f pauseMs=%d hideQuickBar=%d",snapEnabled,snapDegrees,snapCounts,snapPauseMs,snapHideQuickBar);
+}
+// The injected mouse move brings up the game's PC quickbar. The game's own
+// quickbar auto-hide (the tilde key) keeps it hidden, so snap turn turns it on each
+// time gameplay starts, in case the game has reloaded its settings since.
+// SnapTurnHideQuickBar=0 leaves the setting to the player.
+void HideQuickBar() {
+    if(!snapHideQuickBar || quickBarFailed)return;
+    int found=EngineCamera::QuickBarAutoHide(true);
+    if(found<0){quickBarFailed=true;InputLog("quickBarAutoHide: setting not recognized, left alone");return;}
+    if(!quickBarLogged || !found)InputLog("quickBarAutoHide found=%d%s",found,found?"":", set to 1");
+    quickBarLogged=true;
 }
 bool GameInForeground() {
     DWORD pid=0;GetWindowThreadProcessId(GetForegroundWindow(),&pid);
@@ -220,7 +233,8 @@ void SnapTurn(XINPUT_GAMEPAD& pad) {
             InputLog("snap #%llu dir=%d: view left gameplay before measurement",snapCount,snapDir);
         }
     }
-    if(!view){snapArmed=false;snapHoldUntil=0;return;} // menus/terminals/scope keep the native right stick
+    if(!view){snapArmed=false;snapHoldUntil=0;quickBarPending=true;return;} // menus/terminals/scope keep the native right stick
+    if(quickBarPending){quickBarPending=false;HideQuickBar();}
     // During gameplay the right stick is snap-only (vertical look did nothing useful with LockVerticalCamera).
     double rx=pad.sThumbRX/32767.,ry=pad.sThumbRY/32767.;
     double magnitude=std::hypot(rx,ry);
