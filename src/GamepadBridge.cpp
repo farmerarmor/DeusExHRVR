@@ -32,6 +32,10 @@ void InputLog(const char* format,...) {
 // ---- Local patch: configurable button layout ([Buttons] in DeusExHRVR.ini) ----
 // Targets: low 16 bits are XInput button bits; these flags select analog triggers.
 constexpr uint32_t TargetLT=1u<<16, TargetRT=1u<<17;
+// QuickSave presses the game's fixed quicksave key, F5, which has no gamepad
+// binding. The key is held while the target is, and only while the game is in front.
+constexpr uint32_t TargetQuickSave=1u<<18;
+bool quickSaveWanted{},quickSaveDown{};uint64_t quickSaveSyncAt{};
 struct ButtonSource {const wchar_t* key;uint16_t bit;};
 // "bit" is what the stock mapper emits for that physical control.
 constexpr ButtonSource buttonSources[]={
@@ -69,7 +73,7 @@ uint32_t ParseTarget(const wchar_t* key,uint32_t fallback,const wchar_t* section
         {L"Back",XINPUT_GAMEPAD_BACK},{L"Start",XINPUT_GAMEPAD_START},
         {L"DPadUp",XINPUT_GAMEPAD_DPAD_UP},{L"DPadDown",XINPUT_GAMEPAD_DPAD_DOWN},
         {L"DPadLeft",XINPUT_GAMEPAD_DPAD_LEFT},{L"DPadRight",XINPUT_GAMEPAD_DPAD_RIGHT},
-        {L"None",0},
+        {L"QuickSave",TargetQuickSave},{L"None",0},
     };
     for(const auto& n:names)if(!_wcsicmp(value,n.name))return n.target;
     InputLog("[%ls] %ls=%ls not recognized; keeping default",section,key,value);
@@ -107,6 +111,7 @@ void LoadButtons() {
 }
 void Emit(XINPUT_GAMEPAD& out,uint32_t target,bool pressed,BYTE analog) {
     if(pressed && (target&0xffff))out.wButtons|=static_cast<WORD>(target&0xffff);
+    if(pressed && (target&TargetQuickSave))quickSaveWanted=true;
     if(target&TargetLT)out.bLeftTrigger=std::max(out.bLeftTrigger,analog);
     if(target&TargetRT)out.bRightTrigger=std::max(out.bRightTrigger,analog);
 }
@@ -201,6 +206,19 @@ void HideQuickBar() {
 bool GameInForeground() {
     DWORD pid=0;GetWindowThreadProcessId(GetForegroundWindow(),&pid);
     return pid==GetCurrentProcessId();
+}
+// Presses or releases F5 to match the QuickSave target (by scan code, which the
+// game's keyboard input and window messages both see).
+void SyncQuickSave() {
+    quickSaveSyncAt=GetTickCount64();
+    bool want=quickSaveWanted && GameInForeground();
+    quickSaveWanted=false;
+    if(want==quickSaveDown)return;
+    INPUT input{};input.type=INPUT_KEYBOARD;input.ki.wScan=0x3f; // F5
+    input.ki.dwFlags=KEYEVENTF_SCANCODE|(want?0:KEYEVENTF_KEYUP);
+    bool sent=SendInput(1,&input,sizeof(input))==1;
+    if(sent || !want)quickSaveDown=want;
+    InputLog("quickSave F5 %s%s",want?"down":"up",sent?"":" (SendInput failed)");
 }
 void SnapTurn(XINPUT_GAMEPAD& pad) {
     auto now=GetTickCount64();
@@ -330,7 +348,9 @@ DWORD WINAPI GetHook(DWORD index,XINPUT_STATE* state) {
     DWORD result=originalGet(index,state);
     if(index || !state)return result;
     std::lock_guard lock(guard);XINPUT_GAMEPAD pad{};
-    if(!Read(pad))return result;
+    bool active=Read(pad);
+    SyncQuickSave(); // also releases F5 when input stops or the game loses focus
+    if(!active)return result;
     ++polls;
     if(result==ERROR_SUCCESS) {
         const auto& real=state->Gamepad;
@@ -382,6 +402,8 @@ void SetChannel(Transport::Header* header) {
 }
 void OnPresent(bool capture) {
     std::lock_guard lock(guard);Install();
+    // If the game stops polling the controller while F5 is held, release it here.
+    if(quickSaveDown && GetTickCount64()-quickSaveSyncAt>250){quickSaveWanted=false;SyncQuickSave();}
     if(capture) {
         InputLog("enabled=%d installed=%d connected=%d polls=%llu changes=%llu packet=%lu lastButtons=%04x sticks=%d,%d/%d,%d triggers=%u,%u",
             enabled,installed,connected,polls,changes,packet,previous.wButtons,previous.sThumbLX,previous.sThumbLY,
