@@ -76,6 +76,11 @@ StanceHoldTrigger=60
 ; the averaging window in milliseconds; 667 is one running stride. 0 disables.
 SideSwayHoldMs=0
 
+; Optional stutter fix from HRDCfix (github.com/imring/HRDCfix): a wait loop
+; in the game sleeps a whole Windows timer tick (~15 ms) at a time; 1 makes it
+; only yield instead. Needs no ASI loader when applied here.
+SleepFix=0
+
 ; Optional filtering of the walk animation's left-right heading swing, in
 ; milliseconds; 0 disables each stage. Two cascaded stages (walking, then a
 ; second rhythm for sprinting). Needs YawOnlyCamera=1 to take effect.

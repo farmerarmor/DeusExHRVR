@@ -97,6 +97,7 @@ float worldScale=100.f;
 // Local patch: optional per-frame camera trace for head-bob analysis.
 // Buffered in memory (4 MB stdio buffer) so it rarely touches the disk.
 bool bobTrace=false;FILE* bobFile{};uint32_t bobLines{};
+bool sleepFix=false; // [VR] SleepFix applied (see Install)
 void BobTrace(double ms,const CameraMath::Matrix& g,const float out[3],const Transport::Tracking& t) {
     if(bobLines>=36000)return;
     if(!bobFile) {
@@ -1222,6 +1223,25 @@ void Install() {
     levelMenu=GetPrivateProfileIntW(L"VR",L"LevelMenu",1,config)!=0;
     yawOnlyCamera=GetPrivateProfileIntW(L"VR",L"YawOnlyCamera",0,config)!=0;
     bobTrace=GetPrivateProfileIntW(L"VR",L"BobTrace",0,config)!=0;
+    // Optional stutter fix from HRDCfix (github.com/imring/HRDCfix, MIT).
+    // 0x54c800 spin-waits on Sleep(1) while a busy flag is set. The game never
+    // calls timeBeginPeriod, so each Sleep(1) can last a whole timer tick
+    // (~15.6 ms, nearly two frames at 120 Hz); Sleep(0) only yields. Bytes
+    // 13-16 hold Sleep's import address, relocated each launch, so they are
+    // not compared. An already-patched byte simply doesn't match.
+    if(GetPrivateProfileIntW(L"VR",L"SleepFix",0,config)!=0) {
+        static const unsigned char spin[]={0x56,0x8b,0xf1,0x8a,0x46,0x08,0x84,0xc0,0x74,0x13,0x57,0x8b,0x3d,0,0,0,0,0x6a,0x01};
+        auto code=reinterpret_cast<unsigned char*>(VA(0x54c800));
+        bool match=true;
+        for(size_t i=0;i<sizeof(spin);i++)if((i<13||i>16)&&code[i]!=spin[i]){match=false;break;}
+        DWORD old{};
+        if(match&&VirtualProtect(code+0x12,1,PAGE_EXECUTE_READWRITE,&old)) {
+            code[0x12]=0x00; // push 1 -> push 0
+            VirtualProtect(code+0x12,1,old,&old);
+            FlushInstructionCache(GetCurrentProcess(),code+0x12,1);
+            sleepFix=true;
+        }
+    }
     auto readInt=[&](const wchar_t* key,int fallback,int hi){return std::clamp(static_cast<int>(GetPrivateProfileIntW(L"VR",key,fallback,config)),0,hi);};
     auto readFloat=[&](const wchar_t* key,const wchar_t* fallback,float lo,float hi,float& target) {
         wchar_t text[32]{};GetPrivateProfileStringW(L"VR",key,fallback,text,32,config);
@@ -1305,7 +1325,7 @@ void Install() {
         }
     }
     FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")) {
-        fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d levelMenu=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g sideSwayHold=%d F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,levelMenu,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0],swayHold.windowMs);fclose(f);
+        fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d levelMenu=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g sideSwayHold=%d sleepFix=%d F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,levelMenu,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0],swayHold.windowMs,int(sleepFix));fclose(f);
     }
 }
 }
