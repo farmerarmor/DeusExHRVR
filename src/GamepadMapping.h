@@ -13,7 +13,8 @@ inline int16_t Stick(float v){return static_cast<int16_t>(std::lround(std::clamp
 inline uint8_t Trigger(float v){return static_cast<uint8_t>(std::lround(std::clamp(Finite(v),0.f,1.f)*255));}
 class Mapper {
     bool menuDown{},longMenu{},rightDown{},dpadUsed{};
-    bool consumedX{},consumedY{};
+    bool consumedX{},consumedY{},calibrationChord{},leftDown{};
+    uint64_t leftStart{},leftUntil{};
     uint64_t menuStart{},rightStart{},backUntil{},startUntil{},scopeUntil{},lastTick{};
 public:
     void Reset(){*this={};}
@@ -21,6 +22,13 @@ public:
         Transport::Gamepad out{};
         if(!in.active || (lastTick && now<lastTick)){Reset();return out;}
         lastTick=now;out.valid=1;
+        if(in.leftClick&&in.rightClick)calibrationChord=true;
+        if(calibrationChord){
+            // Swallow both release orders, movement, firing and pending pulses.
+            // The game receives raw clicks separately for weapon calibration.
+            bool held=in.leftClick||in.rightClick;
+            Reset();lastTick=now;calibrationChord=held;return out;
+        }
         out.leftX=Stick(in.leftX);out.leftY=Stick(in.leftY);
         out.rightX=Stick(in.rightX);out.rightY=Stick(in.rightY);
         out.leftTrigger=Trigger(in.leftTrigger);out.rightTrigger=Trigger(in.rightTrigger);
@@ -33,7 +41,11 @@ public:
         button(in.y&&!consumedY,XINPUT_GAMEPAD_B);
         button(in.leftGrip>.5f,XINPUT_GAMEPAD_LEFT_SHOULDER);
         button(in.rightGrip>.5f,XINPUT_GAMEPAD_RIGHT_SHOULDER);
-        button(in.leftClick,XINPUT_GAMEPAD_LEFT_THUMB);
+        // A short grace period prevents crouch when the two clicks arrive apart.
+        if(in.leftClick&&!leftDown)leftStart=now;
+        if(!in.leftClick&&leftDown&&now-leftStart<150)leftUntil=now+120;
+        leftDown=in.leftClick;
+        button((in.leftClick&&now-leftStart>=150)||now<leftUntil,XINPUT_GAMEPAD_LEFT_THUMB);
         if(in.rightClick && !rightDown){rightStart=now;dpadUsed=false;}
         if(in.rightClick) {
             button(in.x,XINPUT_GAMEPAD_BACK);

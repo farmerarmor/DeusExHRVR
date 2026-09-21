@@ -22,6 +22,7 @@
 #include <fstream>
 #include <intrin.h>
 #include "ImmersiveScope.h"
+#include "WeaponCalibration.h"
 
 // Supported executable only. All preferred addresses are rebased for ASLR.
 // F6 toggles tracking. Camera poses are attached to the scene and then to the
@@ -43,6 +44,8 @@ ImmersiveScope::Gesture scopeGesture;
 std::atomic<uint64_t> scopePulseUntil{};
 uint64_t scopeToggleAfter{};
 bool autoScopeOwned{};
+WeaponCalibration::Session calibration;
+WeaponCalibration::Store calibrationStore;
 bool lockVerticalCamera{};
 bool experimentalMotionControls{};
 bool motionControls=true;
@@ -711,6 +714,8 @@ void __fastcall UpdateHook(void* self,void*) {
     }
     {
         std::lock_guard lock(stateMutex);
+        bool calibrationUpdated=false;
+        if(recenterRequested || !requested || screenReasons || gameMenuOpen)calibration.Cancel();
         current.active=false;
         current.leveled=false;
         current.inputIndex=~0u;
@@ -730,9 +735,11 @@ void __fastcall UpdateHook(void* self,void*) {
             scopeWeapon=data && data[0x425]!=0;
         }
         const bool scopeAllowed=immersiveScope && motionControls && experimentalMotionControls && requested &&
-            scopeWeapon && !(screenReasons&~16u) && !gameMenuOpen && trackingReader.Read(channel,scopeTracking,now);
-        const bool nearEye=scopeGesture.Update(scopeTracking,scopeAllowed,now);
-        if(scopeAllowed && now>=scopeToggleAfter && ((nearEye&&!nativeScope)||(!nearEye&&nativeScope&&autoScopeOwned))) {
+            scopeWeapon && !(screenReasons&~16u) && !gameMenuOpen && trackingReader.Read(channel,scopeTracking,now) && scopeTracking.rightController.valid;
+        const bool calibrating=scopeTracking.controllerButtons==3 || calibration.Busy();
+        if(calibrating)scopePulseUntil=0;
+        const bool nearEye=scopeGesture.Update(scopeTracking,scopeAllowed&&!calibrating,now);
+        if(scopeAllowed && !calibrating && now>=scopeToggleAfter && ((nearEye&&!nativeScope)||(!nearEye&&nativeScope&&autoScopeOwned))) {
             scopePulseUntil=now+120;scopeToggleAfter=now+650;
             autoScopeOwned=nearEye;
         }
@@ -783,13 +790,43 @@ void __fastcall UpdateHook(void* self,void*) {
                 }
                 if(bobTrace)BobTrace(ms,current.originalWorld,renderBase.m+12,t);
             }
+            if(experimentalMotionControls && t.rightController.valid && active==manager+0x6f0) {
+                auto entity=*reinterpret_cast<void**>(active+0xaa0);
+                using Equipped=unsigned char*(__cdecl*)(void*);
+                auto holder=entity?reinterpret_cast<Equipped>(base+0x66af40-0x400000)(entity):nullptr;
+                auto weapon=holder?*reinterpret_cast<unsigned char**>(holder+0x14):nullptr;
+                if(weapon && *reinterpret_cast<uintptr_t*>(weapon)==base+0xab1944-0x400000) {
+                    using FindInstance=void*(__cdecl*)(uint32_t);
+                    auto handle=*reinterpret_cast<uint32_t*>(weapon+0x6c);
+                    auto instance=handle!=0x7fffffffu?reinterpret_cast<FindInstance>(base+0x6082a0-0x400000)(handle):nullptr;
+                    if(instance) {
+                        auto raw=CameraMath::ControllerMuzzle(renderBase,reference,t.rightController.aim,worldScale,controllerMuzzleForward);
+                        // Native weapon constructor 0x761130 stores the asset-table ID at +0x58.
+                        // 0x777040 resolves its model through that ID, independent of instance handles.
+                        auto key=*reinterpret_cast<uint32_t*>(weapon+0x58);
+                        if(key<0x18000) {
+                            auto offset=calibrationStore.Get(key);
+                            auto result=calibration.Update(WeaponCalibration::Metres(raw,worldScale),offset,key,
+                                reinterpret_cast<uintptr_t>(instance),t.controllerButtons,
+                                t.gamepad.valid && !nativeScope && !gameMenuOpen,now);
+                            calibrationUpdated=true;
+                            if(result.event==WeaponCalibration::Event::Frozen)MessageBeep(MB_OK);
+                            if(result.event==WeaponCalibration::Event::Save) {
+                                bool saved=calibrationStore.Save(key,result.offset);
+                                FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")){fprintf(f,"weaponCalibration key=%08x saved=%d\n",key,saved);fclose(f);}
+                                MessageBeep(saved?MB_OK:MB_ICONERROR);
+                                if(!saved)result.muzzle=CameraMath::Multiply(offset,WeaponCalibration::Metres(raw,worldScale));
+                            }
+                            raw=WeaponCalibration::Units(result.muzzle,worldScale);
+                        }
+                        weaponPose={weapon,instance,raw,t.tick,true,*reinterpret_cast<void**>(weapon+0x64)};
+                    }
+                }
+            }
             current.world=CameraMath::HeadWorld(renderBase,reference,t.head,worldScale);
             if(immersiveScopeActive) {
-                auto aim=CameraMath::HeadWorld(renderBase,reference,t.rightController.aim,worldScale);
-                // The native scoped weapon supplies its HUD/ADS behavior; its
-                // optical viewpoint lies on the same line as the controller muzzle.
-                current.world=aim;
-                for(int j=0;j<3;++j)current.world.m[12+j]+=aim.m[8+j]*controllerMuzzleForward*worldScale;
+                // Use the same calibrated firing line as the rendered rifle and shots.
+                if(weaponPose.active)current.world=WeaponCalibration::Camera(weaponPose.muzzle);
             }
             current.view=CameraMath::InverseRigid(current.world);
             current.manager=CameraMath::Load(manager+0x13b0);
@@ -818,20 +855,9 @@ void __fastcall UpdateHook(void* self,void*) {
                 auto player=reinterpret_cast<FindPlayer>(base+0x6032c0-0x400000)(current.playerInstance);
                 if(player)current.inputIndex=*reinterpret_cast<uint32_t*>(player+0x1c);
             }
-            if(experimentalMotionControls && t.rightController.valid && active==manager+0x6f0) {
-                auto entity=*reinterpret_cast<void**>(active+0xaa0);
-                using Equipped=unsigned char*(__cdecl*)(void*);
-                auto holder=entity?reinterpret_cast<Equipped>(base+0x66af40-0x400000)(entity):nullptr;
-                auto weapon=holder?*reinterpret_cast<unsigned char**>(holder+0x14):nullptr;
-                if(weapon && *reinterpret_cast<uintptr_t*>(weapon)==base+0xab1944-0x400000) {
-                    using FindInstance=void*(__cdecl*)(uint32_t);
-                    auto handle=*reinterpret_cast<uint32_t*>(weapon+0x6c);
-                    auto instance=handle!=0x7fffffffu?reinterpret_cast<FindInstance>(base+0x6082a0-0x400000)(handle):nullptr;
-                    if(instance)weaponPose={weapon,instance,CameraMath::ControllerMuzzle(renderBase,reference,
-                        t.rightController.aim,worldScale,controllerMuzzleForward),t.tick,true,*reinterpret_cast<void**>(weapon+0x64)};
-                }
-            }
+
         }
+        if(!calibrationUpdated)calibration.Cancel();
     }
     if(budget.load()<=0)return;
     std::lock_guard lock(output);
@@ -1252,6 +1278,7 @@ Transport::RenderInfo OnPresent(uint64_t frame,bool capture) {
     // Menus/videos can keep presenting while simulation (and camera updates)
     // is paused. Refresh here as well, before the following frame is built.
     RefreshScreenMode();if(screenReasons)current.active=false;
+    if(screenReasons || gameMenuOpen || !requested || recenterRequested)calibration.Cancel();
     LevelFrozenView(frame);
     if(effectsCapture){SaveEffects(frame);effectCount=0;shaderTrace.End();}effectsCapture=capture;
     if(capture)shaderTrace.Begin(frame+1);

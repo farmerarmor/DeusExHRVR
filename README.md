@@ -4,7 +4,7 @@ Experimental VR mod for **Deus Ex: Human Revolution — Director's Cut**, using 
 
 Gameplay stereo, headset tracking, HUD alignment, motion-controlled weapon aiming, controller buttons, and selectable interaction/walking directions have been tested in-headset. Automatic widescreen menus and several lighting, shadow and sky corrections are included. This remains an experimental prerelease; weapon visibility at extreme viewing angles and untested missions/effects still need broader testing.
 
-Current source also includes the SteamVR OpenXR sRGB compatibility fix, controller menu chords, and optional immersive sniper scope. The imported Luma lighting/color work remains experimental and disabled by default. XeGTAO is disabled following headset flicker and performance regressions. Roomscale body movement is not implemented.
+Version 0.3.0 includes per-weapon grip calibration, the SteamVR OpenXR sRGB compatibility fix, controller menu chords, and optional immersive sniper scope. The imported Luma lighting/color work remains experimental and disabled by default; its compiled shaders are included. XeGTAO is disabled following headset flicker and performance regressions. Roomscale body movement is not implemented.
 
 ## Download and install
 
@@ -72,6 +72,10 @@ Terminal interaction, hacking, the main/pause/game-over menus, sniper scope aimi
 Set `LockVerticalCamera=1` under `[VR]` in `DeusExHRVR.ini` to keep mouse/gamepad aiming pitch out of the full-VR camera. The gun still aims vertically, while the VR camera uses a level base plus your headset pitch. Horizontal look stays available. Virtual-screen modes, including scoped aiming, retain the native camera. The option defaults to `0` (off); restart the game after changing it.
 
 Set `MotionControls=0` under `[VR]` to disable all motion-controller features, including controller tracking, the weapon experiment, and controller-based interaction/walking. Headset VR and `Headset` direction settings stay available; `Controller` directions fall back to native mouse/gamepad direction. `MotionControls=1` enables controller features selected by the other settings and is the default for compatibility. Restart after changing it.
+
+To adjust a weapon's grip, use full VR with motion-controlled weapons enabled and keep the weapon out of scope mode. Press both thumbsticks and hold for one second, until the gun stops following your hand (a system tone also signals this). Keep holding and move/rotate your right controller into the grip position you want. Release either thumbstick to save, then release the other. Each weapon type keeps its own position and rotation offset in `DeusExHRVR-weapons.ini` beside the game executable, including across restarts. The gun, firing line, muzzle effects and immersive scope share that offset. Repeat to readjust; delete that file while the game is closed to reset all weapons.
+
+The calibration gesture consumes controller movement, turning, firing and button actions until both sticks are released. Left-stick crouch has a 150 ms grace period to allow the two clicks to arrive together; a quick tap still crouches. Tracking loss, menus, recentering or weapon changes cancel an unfinished calibration. Install the matching game DLL and host together: this build uses transport version 5.
 
 `ImmersiveScope=1` optionally keeps native scoped weapons in full VR. With motion-controlled weapons enabled, raise the right controller near your eye and point forward to enter the scope; lower it to exit. The magnified view follows controller aim, using the rifle's firing line as a shared optical viewpoint for both eyes. `ScopeMagnification=4` controls zoom (1-12). This alignment has been tested in-headset with the sniper rifle. The default remains the automatic virtual screen (`ImmersiveScope=0`). Restart after changing these settings.
 

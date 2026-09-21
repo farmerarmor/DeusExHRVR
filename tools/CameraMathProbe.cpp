@@ -11,8 +11,10 @@ void Check(bool value,const char* name){if(!value){fprintf(stderr,"FAIL %s\n",na
 bool Near(float a,float b){return std::abs(a-b)<0.0001f;}
 #include "GamepadChecks.h"
 #include "ImmersiveScope.h"
+#include "WeaponCalibrationChecks.h"
 int main(int argc,char** argv) {
     CheckGamepadMapping();
+    CheckWeaponCalibration();
     {
         ImmersiveScope::Gesture gesture;Transport::Tracking t{};
         t.valid=1;t.rightController.valid=1;t.head.orientation.w=t.rightController.aim.orientation.w=1;

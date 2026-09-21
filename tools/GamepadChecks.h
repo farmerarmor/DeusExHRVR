@@ -6,7 +6,8 @@ inline void CheckGamepadMapping() {
     Mapper m;Input i;i.active=true;
     i.a=i.b=i.x=i.y=i.leftClick=true;i.leftGrip=i.rightGrip=1;
     i.leftTrigger=.5f;i.rightTrigger=1;i.leftY=1;i.rightX=-1;
-    auto p=m.Update(i,100);
+    m.Update(i,100);
+    auto p=m.Update(i,250);
     Check(p.buttons==(XINPUT_GAMEPAD_A|XINPUT_GAMEPAD_B|XINPUT_GAMEPAD_X|XINPUT_GAMEPAD_Y|
         XINPUT_GAMEPAD_LEFT_THUMB|XINPUT_GAMEPAD_LEFT_SHOULDER|XINPUT_GAMEPAD_RIGHT_SHOULDER),"Xbox face buttons, crouch and bumpers");
     Check(p.leftTrigger==128 && p.rightTrigger==255 && p.leftY==32767 && p.rightX==-32767,"analog triggers and Xbox stick signs/ranges");
@@ -61,6 +62,18 @@ inline void CheckGamepadMapping() {
     Check(p.buttons==(XINPUT_GAMEPAD_BACK|XINPUT_GAMEPAD_DPAD_UP)&&!p.leftY,"menu chord and D-pad coexist without walking");
     i.active=false;m.Update(i,110);i={};i.active=true;i.x=true;
     Check(m.Update(i,120).buttons==XINPUT_GAMEPAD_X,"focus loss clears consumed face buttons");
+    for(bool releaseLeft:{false,true}) {
+        m.Reset();i={};i.active=true;i.leftClick=true;
+        Check(!m.Update(i,100).buttons,"left click grace period allows calibration chord");
+        i.rightClick=true;i.leftY=1;i.rightX=1;i.rightTrigger=1;
+        auto silent=m.Update(i,150);
+        Check(!silent.buttons&&!silent.leftY&&!silent.rightX&&!silent.rightTrigger,"calibration consumes crouch scope movement firing and D-pad");
+        m.Update(i,1200);if(releaseLeft)i.leftClick=false;else i.rightClick=false;
+        Check(!m.Update(i,1300).buttons,"calibration consumes first stick release");
+        i.leftClick=i.rightClick=false;Check(!m.Update(i,1400).buttons,"calibration consumes second stick release without scope pulse");
+    }
+    m.Reset();i={};i.active=true;i.leftClick=true;m.Update(i,100);i.leftClick=false;
+    Check(m.Update(i,200).buttons==XINPUT_GAMEPAD_LEFT_THUMB,"short left stick tap retains crouch");
     m.Reset();i={};i.active=true;i.rightClick=true;i.leftX=.7f;i.leftY=.8f;
     Check(m.Update(i,100).buttons==XINPUT_GAMEPAD_DPAD_UP,"diagonal selects just one augmentation");
     i.leftX=i.leftY=.1f;Check(m.Update(i,200).buttons==0,"D-pad centre releases direction");

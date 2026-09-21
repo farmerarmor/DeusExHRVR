@@ -7,7 +7,8 @@ $m=Get-Content -LiteralPath (Join-Path $backupRoot 'install.json') -Raw|ConvertF
 if($m.gameRoot -ne $gameRoot){throw 'Backup belongs to another game directory.'}
 $allowed=@('d3d11.dll','atidxx32.dll','atiadlxy.dll','DeusExHRVR\DeusExHRVRHost.exe')
 foreach($f in $m.files){
-    if($f.path -notin $allowed){throw 'Unexpected file in backup manifest.'}
+    $shader=$f.path -eq 'DeusExHRVR\shaders\dxhr\table.csv' -or $f.path -match '^DeusExHRVR\\shaders\\dxhr\\compiled\\[A-Za-z0-9_. -]+\.cso$'
+    if($f.path -notin $allowed -and !$shader){throw 'Unexpected file in backup manifest.'}
     $target=Join-Path $gameRoot $f.path
     if($f.existed){Copy-Item -LiteralPath (Join-Path $backupRoot $f.path) -Destination $target -Force}
     elseif(Test-Path -LiteralPath $target){Remove-Item -LiteralPath $target}

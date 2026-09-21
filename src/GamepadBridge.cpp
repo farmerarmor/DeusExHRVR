@@ -20,6 +20,7 @@ GetState originalGet{};SetState originalSet{};
 bool enabled{},configured{},installed{},connected{};
 DWORD packet{};XINPUT_GAMEPAD previous{};
 uint64_t polls{},changes{},retryTick{};
+bool calibrationInputBlocked{};
 wchar_t configPath[MAX_PATH]{};
 
 void InputLog(const char* format,...) {
@@ -276,6 +277,14 @@ bool Read(XINPUT_GAMEPAD& pad) {
     if(fresh && latest.gamepad.valid) {
         static_assert(sizeof(pad)==sizeof(Transport::Gamepad)-sizeof(uint32_t));
         std::memcpy(&pad,&latest.gamepad.buttons,sizeof(pad));connected=true;
+        if(latest.controllerButtons==3)calibrationInputBlocked=true;
+        if(calibrationInputBlocked){
+            pad={};
+            for(size_t i=0;i<buttonCount;i++){buttonWasDown[i]=false;buttonTapUntil[i]=0;}
+            snapPending=snapMoving=snapArmed=false;
+            if(!latest.controllerButtons)calibrationInputBlocked=false;
+            return true;
+        }
         ApplyButtons(pad);
         if(EngineCamera::ImmersiveScopeButton())pad.wButtons|=XINPUT_GAMEPAD_RIGHT_THUMB;
         if(snapEnabled)SnapTurn(pad);

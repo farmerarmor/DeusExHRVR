@@ -15,3 +15,6 @@
 *.recipe
 # Compiled shader blobs (produced by tools/compile_shaders.ps1 in CI)
 shaders/dxhr/compiled/
+
+# Personal weapon grip calibration
+/DeusExHRVR-weapons.ini

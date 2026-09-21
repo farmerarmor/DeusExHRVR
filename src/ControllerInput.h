@@ -66,7 +66,7 @@ public:
         return XR_SUCCEEDED(xrCreateActionSpace(session,&space,&aimSpace));
     }
     void Sample(XrSession session,XrSpace local,XrTime time,bool focused,Transport::Tracking& tracking) {
-        tracking.rightController={};tracking.gamepad={};
+        tracking.rightController={};tracking.gamepad={};tracking.controllerButtons=0;
         if(!aimSpace || !focused){mapper.Reset();return;}
         XrActiveActionSet active{actions,XR_NULL_PATH};
         XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};sync.countActiveActionSets=1;sync.activeActionSets=&active;
@@ -99,6 +99,7 @@ public:
         input.leftTrigger=scalar(LeftTrigger);input.rightTrigger=scalar(RightTrigger);
         input.leftGrip=scalar(LeftGrip);input.rightGrip=scalar(RightGrip);
         stick(LeftStick,input.leftX,input.leftY);stick(RightStick,input.rightX,input.rightY);
+        tracking.controllerButtons=input.active?((input.leftClick?1u:0u)|(input.rightClick?2u:0u)):0u;
         tracking.gamepad=mapper.Update(input,tracking.tick);
     }
 };
