@@ -71,6 +71,11 @@ StanceHold=0
 ; transition speed.
 StanceHoldTrigger=60
 
+; Optional: keep the camera on the player's own path instead of following the
+; run animation's side-to-side sway (about 1 cm, once per step). The value is
+; the averaging window in milliseconds; 667 is one running stride. 0 disables.
+SideSwayHoldMs=0
+
 ; Optional filtering of the walk animation's left-right heading swing, in
 ; milliseconds; 0 disables each stage. Two cascaded stages (walking, then a
 ; second rhythm for sprinting). Needs YawOnlyCamera=1 to take effect.

@@ -139,6 +139,8 @@ Measured against the player entity over 9000 frames on the supported build: the 
 
 Holding the height instead makes gait offsets and walking bob invisible, while a real stance change - crouched and standing differ by about 300 units - is followed at the speed of the game's own crouch/stand transition (about 1000 units/s, measured) until the camera settles. `StanceHoldTrigger` separates the two: gait offsets are 15-25 units and walking bob is about 2. Defaults to `0`. Ladders, cover, vaulting and elevators have not been tested with it yet.
 
+`SideSwayHoldMs` under `[VR]` does the same for sideways motion. While running, the game sways the camera side to side relative to the player's own position, about 1 cm peak to peak, once per step and once per stride, while the body itself travels straight (measured over two 46-second runs; standing, the camera sits exactly on the body, and running leans it about 3 cm forward). With `SideSwayHoldMs=667` - one running stride - the VR camera stays on the player's path at the camera's average offset over the last 667 ms, which cancels the sway without lag because that offset barely changes while moving; in the measured runs it removed about 85-90% of the stride sway and nearly all of the step sway. Offsets larger than 15 cm (camera cuts, cover and similar) pass through untouched. Defaults to `0` (off).
+
 Optional heading-swing filtering smooths the walk animation's left-right swing of the camera heading out of the VR view, without touching the game's own camera. It needs `YawOnlyCamera=1`. Each setting is a time window in milliseconds and defaults to `0` (off):
 
 ```ini

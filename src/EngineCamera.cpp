@@ -233,6 +233,49 @@ struct StanceHold {
         return held;
     }
 } stanceHold;
+// Hold the camera's horizontal position on the player's own path.
+//
+// Measured while running (two 46 s runs at 5.2 m/s): the game sways the camera
+// sideways relative to the player entity at the stride (667 ms) and step
+// (333 ms) rates, about 1 cm peak to peak, while the entity itself travels
+// straight. Standing, the camera sits exactly on the entity origin; running
+// leans it about 3 cm forward. So place the camera at the entity origin plus
+// its offset averaged over one stride: that offset barely changes while
+// moving, so the average removes the sway without lag. Running and sprinting
+// offsets stay under 7 cm; anything past the limit (camera cuts, cover,
+// takedowns) passes through, and the correction eases out rather than popping.
+struct SwayHold {
+    int windowMs{};                      // [VR] SideSwayHoldMs; 0 = off
+    static constexpr float limit=45.f;   // game units (15 cm)
+    static constexpr float rate=150.f;   // how fast the correction eases out, units/s
+    struct Sample {double t;float x,y;};
+    std::array<Sample,512> ring{};size_t head{},size{};
+    double sumX{},sumY{},lastT{};float cx{},cy{},lastX{},lastY{};bool have{};
+    void Clear(){size=0;sumX=sumY=0;}
+    void Reset(){Clear();cx=cy=0;have=false;}
+    const Sample& Oldest() const {return ring[(head+ring.size()-size)%ring.size()];}
+    void Apply(float& camX,float& camY,float entX,float entY,double now) {
+        float dx=camX-entX,dy=camY-entY;
+        bool jump=!have || now<lastT || now-lastT>500 || std::hypot(dx-lastX,dy-lastY)>300; // load, teleport, pause
+        double dt=have?std::clamp((now-lastT)/1000.,0.,0.1):0.;
+        if(jump)Clear();
+        float tx=0,ty=0;
+        bool inside=std::hypot(dx,dy)<=limit;
+        if(inside) {
+            if(size==ring.size()){sumX-=Oldest().x;sumY-=Oldest().y;size--;}
+            ring[head]={now,dx,dy};head=(head+1)%ring.size();size++;sumX+=dx;sumY+=dy;
+            while(size>1 && now-Oldest().t>windowMs){sumX-=Oldest().x;sumY-=Oldest().y;size--;}
+            tx=float(sumX/double(size))-dx;ty=float(sumY/double(size))-dy;
+        } else Clear();
+        // Follow the target while holding; ease toward it when it would jump.
+        float step=float(rate*dt),ex=tx-cx,ey=ty-cy,d=std::hypot(ex,ey);
+        if(inside && d<=step*4){cx=tx;cy=ty;}
+        else if(d>step && d>0){cx+=ex/d*step;cy+=ey/d*step;}
+        else {cx=tx;cy=ty;}
+        camX+=cx;camY+=cy;
+        lastT=now;lastX=dx;lastY=dy;have=true;
+    }
+} swayHold;
 // Heading (yaw) swing filter: two cascaded stages; snap turns and other jumps
 // (> 3 deg in one frame) are tracked as an offset so they pass through instantly.
 struct YawSwing {
@@ -780,6 +823,14 @@ void __fastcall UpdateHook(void* self,void*) {
                         renderBase.m[14]=entZ+stanceHold.Apply(eye,ms);
                     else stanceHold.Reset(); // no player (menus, cutscenes): leave the camera alone
                 }
+                if(swayHold.windowMs>0) {
+                    auto entity=*reinterpret_cast<const unsigned char* const*>(active+0xaa0);
+                    float entX=entity?*reinterpret_cast<const float*>(entity+0x20):0.f;
+                    float entY=entity?*reinterpret_cast<const float*>(entity+0x24):0.f;
+                    if(entity && std::isfinite(entX) && std::isfinite(entY))
+                        swayHold.Apply(renderBase.m[12],renderBase.m[13],entX,entY,ms);
+                    else swayHold.Reset();
+                }
                 if(yawOnlyCamera && (yawSwing.a.enabled||yawSwing.b.enabled)) {
                     // renderBase is pure heading here: rebuild it from the filtered yaw.
                     double yaw=std::atan2(renderBase.m[9],renderBase.m[8])*180/3.14159265358979;
@@ -1178,6 +1229,7 @@ void Install() {
     yawSwing.a.enabled=yawSwing.a.windowMs[0]>0;yawSwing.b.enabled=yawSwing.b.windowMs[0]>0;
     stanceHold.enabled=GetPrivateProfileIntW(L"VR",L"StanceHold",0,config)!=0;
     readFloat(L"StanceHoldTrigger",L"60",5,400,stanceHold.trigger);
+    swayHold.windowMs=readInt(L"SideSwayHoldMs",0,2000);
     stanceHold.Reset();
     motionControls=DirectionConfig::MotionEnabled(config);
     experimentalMotionControls=motionControls && GetPrivateProfileIntW(L"VR",L"ExperimentalMotionControls",0,config)!=0;
@@ -1248,7 +1300,7 @@ void Install() {
         }
     }
     FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")) {
-        fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d levelMenu=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,levelMenu,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0]);fclose(f);
+        fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d levelMenu=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g sideSwayHold=%d F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,levelMenu,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0],swayHold.windowMs);fclose(f);
     }
 }
 }
