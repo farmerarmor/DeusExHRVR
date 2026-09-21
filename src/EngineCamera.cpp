@@ -97,6 +97,7 @@ float worldScale=100.f;
 // Local patch: optional per-frame camera trace for head-bob analysis.
 // Buffered in memory (4 MB stdio buffer) so it rarely touches the disk.
 bool bobTrace=false;FILE* bobFile{};uint32_t bobLines{};
+bool sleepFix=false; // [VR] SleepFix applied (see Install)
 void BobTrace(double ms,const CameraMath::Matrix& g,const float out[3],const Transport::Tracking& t) {
     if(bobLines>=36000)return;
     if(!bobFile) {
@@ -233,6 +234,54 @@ struct StanceHold {
         return held;
     }
 } stanceHold;
+// Hold the camera's horizontal position on the player's own path.
+//
+// Measured while running (two 46 s runs at 5.2 m/s): the game sways the camera
+// sideways relative to the player entity at the stride (667 ms) and step
+// (333 ms) rates, about 1 cm peak to peak, while the entity itself travels
+// straight. Standing, the camera sits exactly on the entity origin; running
+// leans it about 3 cm forward. So place the camera at the entity origin plus
+// its offset averaged over one stride: that offset barely changes while
+// moving, so the average removes the sway without lag. Running and sprinting
+// offsets stay under 7 cm; anything past the limit (camera cuts, cover,
+// takedowns) passes through, and the correction eases out rather than popping.
+struct SwayHold {
+    int windowMs{};                      // [VR] SideSwayHoldMs; 0 = off
+    static constexpr float limit=45.f;   // game units (15 cm)
+    static constexpr float rate=150.f;   // how fast the correction eases out, units/s
+    // Never more than 4 cm from the game's camera, so deliberate camera moves
+    // (cover, pull-backs) can't lag behind. Running corrections stay under it:
+    // 99th percentile 3.4 cm; the cap binds on 0.2% of running frames.
+    static constexpr float cap=12.f;
+    struct Sample {double t;float x,y;};
+    std::array<Sample,512> ring{};size_t head{},size{};
+    double sumX{},sumY{},lastT{};float cx{},cy{},lastX{},lastY{};bool have{};
+    void Clear(){size=0;sumX=sumY=0;}
+    void Reset(){Clear();cx=cy=0;have=false;}
+    const Sample& Oldest() const {return ring[(head+ring.size()-size)%ring.size()];}
+    void Apply(float& camX,float& camY,float entX,float entY,double now) {
+        float dx=camX-entX,dy=camY-entY;
+        bool jump=!have || now<lastT || now-lastT>500 || std::hypot(dx-lastX,dy-lastY)>300; // load, teleport, pause
+        double dt=have?std::clamp((now-lastT)/1000.,0.,0.1):0.;
+        if(jump)Clear();
+        float tx=0,ty=0;
+        bool inside=std::hypot(dx,dy)<=limit;
+        if(inside) {
+            if(size==ring.size()){sumX-=Oldest().x;sumY-=Oldest().y;size--;}
+            ring[head]={now,dx,dy};head=(head+1)%ring.size();size++;sumX+=dx;sumY+=dy;
+            while(size>1 && now-Oldest().t>windowMs){sumX-=Oldest().x;sumY-=Oldest().y;size--;}
+            tx=float(sumX/double(size))-dx;ty=float(sumY/double(size))-dy;
+        } else Clear();
+        // Follow the target while holding; ease toward it when it would jump.
+        float step=float(rate*dt),ex=tx-cx,ey=ty-cy,d=std::hypot(ex,ey);
+        if(inside && d<=step*4){cx=tx;cy=ty;}
+        else if(d>step && d>0){cx+=ex/d*step;cy+=ey/d*step;}
+        else {cx=tx;cy=ty;}
+        if(float m=std::hypot(cx,cy);m>cap){cx*=cap/m;cy*=cap/m;}
+        camX+=cx;camY+=cy;
+        lastT=now;lastX=dx;lastY=dy;have=true;
+    }
+} swayHold;
 // Heading (yaw) swing filter: two cascaded stages; snap turns and other jumps
 // (> 3 deg in one frame) are tracked as an offset so they pass through instantly.
 struct YawSwing {
@@ -780,6 +829,14 @@ void __fastcall UpdateHook(void* self,void*) {
                         renderBase.m[14]=entZ+stanceHold.Apply(eye,ms);
                     else stanceHold.Reset(); // no player (menus, cutscenes): leave the camera alone
                 }
+                if(swayHold.windowMs>0) {
+                    auto entity=*reinterpret_cast<const unsigned char* const*>(active+0xaa0);
+                    float entX=entity?*reinterpret_cast<const float*>(entity+0x20):0.f;
+                    float entY=entity?*reinterpret_cast<const float*>(entity+0x24):0.f;
+                    if(entity && std::isfinite(entX) && std::isfinite(entY))
+                        swayHold.Apply(renderBase.m[12],renderBase.m[13],entX,entY,ms);
+                    else swayHold.Reset();
+                }
                 if(yawOnlyCamera && (yawSwing.a.enabled||yawSwing.b.enabled)) {
                     // renderBase is pure heading here: rebuild it from the filtered yaw.
                     double yaw=std::atan2(renderBase.m[9],renderBase.m[8])*180/3.14159265358979;
@@ -1166,6 +1223,25 @@ void Install() {
     levelMenu=GetPrivateProfileIntW(L"VR",L"LevelMenu",1,config)!=0;
     yawOnlyCamera=GetPrivateProfileIntW(L"VR",L"YawOnlyCamera",0,config)!=0;
     bobTrace=GetPrivateProfileIntW(L"VR",L"BobTrace",0,config)!=0;
+    // Optional stutter fix from HRDCfix (github.com/imring/HRDCfix, MIT).
+    // 0x54c800 spin-waits on Sleep(1) while a busy flag is set. The game never
+    // calls timeBeginPeriod, so each Sleep(1) can last a whole timer tick
+    // (~15.6 ms, nearly two frames at 120 Hz); Sleep(0) only yields. Bytes
+    // 13-16 hold Sleep's import address, relocated each launch, so they are
+    // not compared. An already-patched byte simply doesn't match.
+    if(GetPrivateProfileIntW(L"VR",L"SleepFix",0,config)!=0) {
+        static const unsigned char spin[]={0x56,0x8b,0xf1,0x8a,0x46,0x08,0x84,0xc0,0x74,0x13,0x57,0x8b,0x3d,0,0,0,0,0x6a,0x01};
+        auto code=reinterpret_cast<unsigned char*>(VA(0x54c800));
+        bool match=true;
+        for(size_t i=0;i<sizeof(spin);i++)if((i<13||i>16)&&code[i]!=spin[i]){match=false;break;}
+        DWORD old{};
+        if(match&&VirtualProtect(code+0x12,1,PAGE_EXECUTE_READWRITE,&old)) {
+            code[0x12]=0x00; // push 1 -> push 0
+            VirtualProtect(code+0x12,1,old,&old);
+            FlushInstructionCache(GetCurrentProcess(),code+0x12,1);
+            sleepFix=true;
+        }
+    }
     auto readInt=[&](const wchar_t* key,int fallback,int hi){return std::clamp(static_cast<int>(GetPrivateProfileIntW(L"VR",key,fallback,config)),0,hi);};
     auto readFloat=[&](const wchar_t* key,const wchar_t* fallback,float lo,float hi,float& target) {
         wchar_t text[32]{};GetPrivateProfileStringW(L"VR",key,fallback,text,32,config);
@@ -1178,6 +1254,7 @@ void Install() {
     yawSwing.a.enabled=yawSwing.a.windowMs[0]>0;yawSwing.b.enabled=yawSwing.b.windowMs[0]>0;
     stanceHold.enabled=GetPrivateProfileIntW(L"VR",L"StanceHold",0,config)!=0;
     readFloat(L"StanceHoldTrigger",L"60",5,400,stanceHold.trigger);
+    swayHold.windowMs=readInt(L"SideSwayHoldMs",0,2000);
     stanceHold.Reset();
     motionControls=DirectionConfig::MotionEnabled(config);
     experimentalMotionControls=motionControls && GetPrivateProfileIntW(L"VR",L"ExperimentalMotionControls",0,config)!=0;
@@ -1248,7 +1325,7 @@ void Install() {
         }
     }
     FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")) {
-        fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d levelMenu=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,levelMenu,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0]);fclose(f);
+        fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d levelMenu=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g sideSwayHold=%d sleepFix=%d F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,levelMenu,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0],swayHold.windowMs,int(sleepFix));fclose(f);
     }
 }
 }
@@ -1366,6 +1443,27 @@ bool SnapTurnView(float& yaw) {
     if(!current.active || screenReasons || gameMenuOpen || !current.playerInstance || now<current.tracking.tick || now-current.tracking.tick>=250)return false;
     yaw=std::atan2(current.originalWorld.m[9],current.originalWorld.m[8]);
     return std::isfinite(yaw);
+}
+// Local patch (snap turn): the game's own quickbar auto-hide, g_quickBarAutoHide,
+// the setting the tilde key toggles. The registration at 0xa68190 passes the
+// value's address (0x01c79eb8) to the setting's constructor, which keeps it at
+// +0x104 of the setting object (0x01c7bb60) and writes the default there; the
+// game's own setter writes that one byte. All of it is checked before touching
+// anything. Returns the value found (before setting it, if asked), or -1 when
+// the layout doesn't match.
+int QuickBarAutoHide(bool set) {
+    if(!base)return -1;
+    auto code=reinterpret_cast<const unsigned char*>(VA(0xa68190));
+    auto dword=[&](size_t at){uint32_t v;memcpy(&v,code+at,4);return uintptr_t(v);};
+    static const unsigned char pushes[]={0x6a,0x01,0x6a,0x00,0x6a,0x00,0x68}; // push 1; push 0; push 0; push value
+    auto value=VA(0x01c79eb8),object=VA(0x01c7bb60),name=VA(0xaa4004);
+    if(memcmp(code,pushes,sizeof(pushes)) || dword(7)!=value || code[11]!=0x68 || dword(12)!=name ||
+        code[16]!=0xb9 || dword(17)!=object || strcmp(reinterpret_cast<const char*>(name),"g_quickBarAutoHide") ||
+        *reinterpret_cast<const uintptr_t*>(object+0x104)!=value)return -1;
+    auto flag=reinterpret_cast<volatile unsigned char*>(value);
+    int found=*flag;
+    if(set && !found)*flag=1;
+    return found;
 }
 
 void SetShaderSwapDevice(ID3D11Device* device){

@@ -19,6 +19,11 @@ MotionControls=1
 ImmersiveScope=0
 ScopeMagnification=4
 
+; Left thumbstick click waits this long (ms) before a hold registers, so the
+; two-stick weapon calibration chord doesn't also crouch. 0 sends it at once,
+; for layouts that map the left click to something other than crouch.
+LeftStickClickDelayMs=150
+
 ; Independent directions: Mouse, Headset, or Controller (right-hand aim).
 ; Mouse retains native mouse/gamepad look direction. Restart after editing.
 ; Interaction selects doors/items; it does not change weapon aiming.
@@ -66,6 +71,16 @@ StanceHold=0
 ; transition speed.
 StanceHoldTrigger=60
 
+; Optional: keep the camera on the player's own path instead of following the
+; run animation's side-to-side sway (about 1 cm, once per step). The value is
+; the averaging window in milliseconds; 667 is one running stride. 0 disables.
+SideSwayHoldMs=0
+
+; Optional stutter fix from HRDCfix (github.com/imring/HRDCfix): a wait loop
+; in the game sleeps a whole Windows timer tick (~15 ms) at a time; 1 makes it
+; only yield instead. Needs no ASI loader when applied here.
+SleepFix=0
+
 ; Optional filtering of the walk animation's left-right heading swing, in
 ; milliseconds; 0 disables each stage. Two cascaded stages (walking, then a
 ; second rhythm for sprinting). Needs YawOnlyCamera=1 to take effect.
@@ -90,8 +105,13 @@ SnapTurnMouseCounts=300
 ; The game ignores mouse look while the left stick is deflected, so walking is
 ; released for at most this long around the injected move.
 SnapTurnPauseMs=60
-; With SnapTurn=1 the right stick's vertical axis is free: RightStickUp and
-; RightStickDown under [Buttons] hold a target while it is pushed up or down.
+; Snap turn's mouse move brings up the PC quickbar. 1 turns on the game's own
+; quickbar auto-hide (the tilde key) whenever gameplay starts; 0 leaves that
+; setting alone.
+SnapTurnHideQuickBar=1
+; RightStickUp and RightStickDown under [Buttons] hold a target while the right
+; stick is pushed up or down during gameplay. With SnapTurn=0, setting either one
+; takes the stick's vertical axis for them; smooth turning keeps the horizontal.
 
 ; Optional button layout. [Buttons] applies to gameplay and scoped aiming,
 ; [ScreenButtons] to everything else: the title and pause menus, the in-game
@@ -100,8 +120,9 @@ SnapTurnPauseMs=60
 ; Omitted entries keep the stock layout. Inputs: RightA, RightB, LeftX, LeftY,
 ; LeftGrip, RightGrip, LeftStickClick, RightStickClick, LeftTrigger,
 ; RightTrigger. Targets: A B X Y LB RB LS RS LT RT Back Start DPadUp DPadDown
-; DPadLeft DPadRight None. <Input>HoldMs=250 delays the target until the input
-; has been held that long; with a delay set, <Input>Tap=A sends a short pulse
+; DPadLeft DPadRight QuickSave None. QuickSave presses F5, the game's quicksave
+; key, which has no gamepad binding. <Input>HoldMs=250 delays the target until
+; the input has been held that long; with a delay set, <Input>Tap=A sends a short pulse
 ; when the input is released early.
 [Buttons]
 

@@ -32,6 +32,10 @@ void InputLog(const char* format,...) {
 // ---- Local patch: configurable button layout ([Buttons] in DeusExHRVR.ini) ----
 // Targets: low 16 bits are XInput button bits; these flags select analog triggers.
 constexpr uint32_t TargetLT=1u<<16, TargetRT=1u<<17;
+// QuickSave presses the game's fixed quicksave key, F5, which has no gamepad
+// binding. The key is held while the target is, and only while the game is in front.
+constexpr uint32_t TargetQuickSave=1u<<18;
+bool quickSaveWanted{},quickSaveDown{};uint64_t quickSaveSyncAt{};
 struct ButtonSource {const wchar_t* key;uint16_t bit;};
 // "bit" is what the stock mapper emits for that physical control.
 constexpr ButtonSource buttonSources[]={
@@ -54,7 +58,7 @@ bool remapActive{};
 // terminals, hacking, videos, game over, loading screens).
 uint32_t screenTarget[buttonCount]{};uint32_t screenLeftTrigger=TargetLT,screenRightTrigger=TargetRT;
 bool screenRemapActive{};
-uint32_t stickUpTarget{},stickDownTarget{}; // right stick up/down during gameplay (needs SnapTurn=1)
+uint32_t stickUpTarget{},stickDownTarget{}; // right stick up/down during gameplay (snap or smooth turn)
 
 uint32_t ParseTarget(const wchar_t* key,uint32_t fallback,const wchar_t* section=L"Buttons") {
     wchar_t value[32]{};GetPrivateProfileStringW(section,key,L"",value,32,configPath);
@@ -69,7 +73,7 @@ uint32_t ParseTarget(const wchar_t* key,uint32_t fallback,const wchar_t* section
         {L"Back",XINPUT_GAMEPAD_BACK},{L"Start",XINPUT_GAMEPAD_START},
         {L"DPadUp",XINPUT_GAMEPAD_DPAD_UP},{L"DPadDown",XINPUT_GAMEPAD_DPAD_DOWN},
         {L"DPadLeft",XINPUT_GAMEPAD_DPAD_LEFT},{L"DPadRight",XINPUT_GAMEPAD_DPAD_RIGHT},
-        {L"None",0},
+        {L"QuickSave",TargetQuickSave},{L"None",0},
     };
     for(const auto& n:names)if(!_wcsicmp(value,n.name))return n.target;
     InputLog("[%ls] %ls=%ls not recognized; keeping default",section,key,value);
@@ -107,6 +111,7 @@ void LoadButtons() {
 }
 void Emit(XINPUT_GAMEPAD& out,uint32_t target,bool pressed,BYTE analog) {
     if(pressed && (target&0xffff))out.wButtons|=static_cast<WORD>(target&0xffff);
+    if(pressed && (target&TargetQuickSave))quickSaveWanted=true;
     if(target&TargetLT)out.bLeftTrigger=std::max(out.bLeftTrigger,analog);
     if(target&TargetRT)out.bRightTrigger=std::max(out.bRightTrigger,analog);
 }
@@ -170,8 +175,10 @@ int snapDir{},snapMisses{};
 uint64_t snapAt{},snapCooldown{},snapCount{},snapHoldUntil{};
 int snapPauseMs=60;
 bool snapHoldAdaptive{};float snapHoldYaw{};uint64_t snapHoldStart{};
+bool snapHideQuickBar{},quickBarPending=true,quickBarFailed{},quickBarLogged{};
 void LoadSnap() {
     snapEnabled=GetPrivateProfileIntW(L"VR",L"SnapTurn",0,configPath)!=0;
+    snapHideQuickBar=GetPrivateProfileIntW(L"VR",L"SnapTurnHideQuickBar",1,configPath)!=0;
     wchar_t text[32]{};
     GetPrivateProfileStringW(L"VR",L"SnapTurnDegrees",L"30",text,32,configPath);
     float degrees=static_cast<float>(_wtof(text));
@@ -183,11 +190,35 @@ void LoadSnap() {
     // deflected, so walking is released until the injected turn shows up.
     snapPauseMs=std::clamp(static_cast<int>(GetPrivateProfileIntW(L"VR",L"SnapTurnPauseMs",60,configPath)),0,500);
     // SnapTurnPauseMs is the maximum; the pause ends as soon as the turn is seen.
-    InputLog("snapTurn enabled=%d degrees=%.1f mouseCounts=%.0f pauseMs=%d",snapEnabled,snapDegrees,snapCounts,snapPauseMs);
+    InputLog("snapTurn enabled=%d degrees=%.1f mouseCounts=%.0f pauseMs=%d hideQuickBar=%d",snapEnabled,snapDegrees,snapCounts,snapPauseMs,snapHideQuickBar);
+}
+// The injected mouse move brings up the game's PC quickbar. The game's own
+// quickbar auto-hide (the tilde key) keeps it hidden, so snap turn turns it on each
+// time gameplay starts, in case the game has reloaded its settings since.
+// SnapTurnHideQuickBar=0 leaves the setting to the player.
+void HideQuickBar() {
+    if(!snapHideQuickBar || quickBarFailed)return;
+    int found=EngineCamera::QuickBarAutoHide(true);
+    if(found<0){quickBarFailed=true;InputLog("quickBarAutoHide: setting not recognized, left alone");return;}
+    if(!quickBarLogged || !found)InputLog("quickBarAutoHide found=%d%s",found,found?"":", set to 1");
+    quickBarLogged=true;
 }
 bool GameInForeground() {
     DWORD pid=0;GetWindowThreadProcessId(GetForegroundWindow(),&pid);
     return pid==GetCurrentProcessId();
+}
+// Presses or releases F5 to match the QuickSave target (by scan code, which the
+// game's keyboard input and window messages both see).
+void SyncQuickSave() {
+    quickSaveSyncAt=GetTickCount64();
+    bool want=quickSaveWanted && GameInForeground();
+    quickSaveWanted=false;
+    if(want==quickSaveDown)return;
+    INPUT input{};input.type=INPUT_KEYBOARD;input.ki.wScan=0x3f; // F5
+    input.ki.dwFlags=KEYEVENTF_SCANCODE|(want?0:KEYEVENTF_KEYUP);
+    bool sent=SendInput(1,&input,sizeof(input))==1;
+    if(sent || !want)quickSaveDown=want;
+    InputLog("quickSave F5 %s%s",want?"down":"up",sent?"":" (SendInput failed)");
 }
 void SnapTurn(XINPUT_GAMEPAD& pad) {
     auto now=GetTickCount64();
@@ -220,7 +251,8 @@ void SnapTurn(XINPUT_GAMEPAD& pad) {
             InputLog("snap #%llu dir=%d: view left gameplay before measurement",snapCount,snapDir);
         }
     }
-    if(!view){snapArmed=false;snapHoldUntil=0;return;} // menus/terminals/scope keep the native right stick
+    if(!view){snapArmed=false;snapHoldUntil=0;quickBarPending=true;return;} // menus/terminals/scope keep the native right stick
+    if(quickBarPending){quickBarPending=false;HideQuickBar();}
     // During gameplay the right stick is snap-only (vertical look did nothing useful with LockVerticalCamera).
     double rx=pad.sThumbRX/32767.,ry=pad.sThumbRY/32767.;
     double magnitude=std::hypot(rx,ry);
@@ -268,6 +300,23 @@ void SnapTurn(XINPUT_GAMEPAD& pad) {
     inject();
 }
 
+// Without snap turn the right stick normally reaches the game untouched. When
+// RightStickUp or RightStickDown is set, gameplay keeps the horizontal axis for
+// smooth turning and gives the vertical axis to those buttons, with the same
+// 30-degree cone as snap turn. A push inside the cone also holds the turn, so a
+// jump or crouch doesn't drift the view.
+void StickButtons(XINPUT_GAMEPAD& pad) {
+    float yaw=0;
+    if(!EngineCamera::SnapTurnView(yaw))return; // menus/terminals/scope keep the native right stick
+    double rx=pad.sThumbRX/32767.,ry=pad.sThumbRY/32767.;
+    double magnitude=std::hypot(rx,ry);
+    pad.sThumbRY=0;
+    if(magnitude>=.6 && std::abs(ry)>=magnitude*.866) {
+        pad.sThumbRX=0;
+        auto target=ry>0?stickUpTarget:stickDownTarget;
+        if(target)Emit(pad,target,true,BYTE(255));
+    }
+}
 bool Read(XINPUT_GAMEPAD& pad) {
     if(!enabled || !channel)return false;
     Transport::Tracking sample{};
@@ -288,6 +337,7 @@ bool Read(XINPUT_GAMEPAD& pad) {
         ApplyButtons(pad);
         if(EngineCamera::ImmersiveScopeButton())pad.wButtons|=XINPUT_GAMEPAD_RIGHT_THUMB;
         if(snapEnabled)SnapTurn(pad);
+        else if(stickUpTarget || stickDownTarget)StickButtons(pad);
     }
     // Keep the device connected after first activation, but release every
     // button/axis on focus loss, sleeping controllers or a stalled companion.
@@ -298,7 +348,9 @@ DWORD WINAPI GetHook(DWORD index,XINPUT_STATE* state) {
     DWORD result=originalGet(index,state);
     if(index || !state)return result;
     std::lock_guard lock(guard);XINPUT_GAMEPAD pad{};
-    if(!Read(pad))return result;
+    bool active=Read(pad);
+    SyncQuickSave(); // also releases F5 when input stops or the game loses focus
+    if(!active)return result;
     ++polls;
     if(result==ERROR_SUCCESS) {
         const auto& real=state->Gamepad;
@@ -350,6 +402,8 @@ void SetChannel(Transport::Header* header) {
 }
 void OnPresent(bool capture) {
     std::lock_guard lock(guard);Install();
+    // If the game stops polling the controller while F5 is held, release it here.
+    if(quickSaveDown && GetTickCount64()-quickSaveSyncAt>250){quickSaveWanted=false;SyncQuickSave();}
     if(capture) {
         InputLog("enabled=%d installed=%d connected=%d polls=%llu changes=%llu packet=%lu lastButtons=%04x sticks=%d,%d/%d,%d triggers=%u,%u",
             enabled,installed,connected,polls,changes,packet,previous.wButtons,previous.sThumbLX,previous.sThumbLY,
