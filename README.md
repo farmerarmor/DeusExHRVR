@@ -30,7 +30,7 @@ Other executable versions and the original non-Director's Cut release are not su
 
 For motion-controlled weapons, copy `DeusExHRVR.ini.example` beside `DXHRDC.exe` as `DeusExHRVR.ini`, set `ExperimentalMotionControls=1`, and restart. `MotionControls=1` enables controller buttons; `InteractionAim` and `MovementDirection` independently accept `Mouse`, `Headset`, or `Controller`. The confirmed local setup uses `WorldUnitsPerMetre=300` with both direction settings at `Headset`; adjust scale for comfort. Upgrading replaces both the game DLL and its companion together. Existing INI settings are preserved.
 
-For a ready-made comfort setup, copy `DeusExHRVR.ini.comfort` beside `DXHRDC.exe` as `DeusExHRVR.ini` instead. It turns on the options below that remove imposed head motion (yaw-only camera, stance hold, heading-swing filtering), snap turn at 30°, controller interaction aim and headset walking direction, with `WorldUnitsPerMetre=300`. It keeps the stock button layout. Nothing in it is enabled by default.
+For a ready-made comfort setup, copy `DeusExHRVR.ini.comfort` beside `DXHRDC.exe` as `DeusExHRVR.ini` instead. It turns on the options below that remove imposed head motion (yaw-only camera, stance hold, heading-swing filtering, fixed conversation camera), snap turn at 30°, controller interaction aim and headset walking direction, with `WorldUnitsPerMetre=300`. It keeps the stock button layout. Nothing in it is enabled by default.
 
 Run the installer as the Windows user who plays the game. It backs up replaced files and original graphics settings to `DeusExHRVR-backup` in the game folder. It enables DX11/native stereo and disables VSync and antialiasing for the tested configuration.
 
@@ -127,6 +127,8 @@ The game's stereo separation/convergence sliders do not calibrate tracked VR: th
 `LevelScreen=1` under `[VR]` (default) places the virtual screen used by the title and pause menus, terminals and videos upright, 2 m straight ahead at head height, keeping only the heading of the head pose when it is placed. Set it to `0` to place it tilted with the head, as before.
 
 `YawOnlyCamera=1` under `[VR]` takes the VR rendering base from the game camera's heading and position only, so the headset supplies all pitch and roll. It goes further than `LockVerticalCamera`, which removes look pitch but keeps the camera's own pitch and roll, including the walk animation's tilt. Aiming, the gun and virtual-screen modes are unaffected. Defaults to `0`; restart after changing it.
+
+`FixedDialogueCamera=1` under `[VR]` keeps the view at Jensen's eyes during conversations instead of following the game's shot cuts between the NPC and Jensen; turn your head to look around. The view is held from the conversation's first camera shot until it ends and the game camera is back at the held pose (at most 2 s later), and Jensen's own model is hidden meanwhile. Cover, takedowns and other scripted camera shots are unaffected. F9 also releases the hold should one ever stay stuck. Defaults to `0`; restart after changing it. It has been tested in-headset with ordinary NPC conversations; social boss conversations and briefings use the same camera path but have not been tested yet.
 
 `StanceHold=1` under `[VR]` takes the VR camera's height from the player's own origin plus a held eye height, rather than following the game camera's vertical motion. It removes the walk animation's bounce and the stance-height steps described below.
 

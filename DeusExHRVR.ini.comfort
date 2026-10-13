@@ -14,6 +14,9 @@ WorldUnitsPerMetre=300
 LockVerticalCamera=1
 YawOnlyCamera=1
 
+; Stay at Jensen's eyes in conversations instead of cutting between shots.
+FixedDialogueCamera=1
+
 ; Hold the eye height: removes walking bob and the bounce when you stop after
 ; crouch-walking or sprinting.
 StanceHold=1

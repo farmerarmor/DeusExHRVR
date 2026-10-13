@@ -60,6 +60,11 @@ LevelScreen=1
 ; Aiming, the gun and virtual-screen modes are unaffected. Restart to apply.
 YawOnlyCamera=0
 
+; Keep the view at Jensen's eyes during conversations instead of following the
+; game's shot cuts between the NPC and Jensen; turn your head to look around.
+; Jensen's own model is hidden while the view is held. Restart to apply.
+FixedDialogueCamera=0
+
 ; Take the camera height from the player's own origin plus a held eye height,
 ; instead of following the game camera. Removes the walk bounce and the stance
 ; height steps the game applies while crouch-walking (+15 units) and sprinting

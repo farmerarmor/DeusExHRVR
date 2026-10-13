@@ -47,6 +47,49 @@ bool autoScopeOwned{};
 WeaponCalibration::Session calibration;
 WeaponCalibration::Store calibrationStore;
 bool lockVerticalCamera{};
+// Local patch (fixed dialogue camera): a conversation cuts the gameplay camera
+// between shots of the NPC and Jensen. With FixedDialogueCamera=1 the VR base
+// stays at the last gameplay pose (Jensen's eyes) while a conversation controls
+// the camera, until the game camera has come back afterwards; the headset still
+// turns and moves the view, and Jensen's own model is hidden.
+//
+// The shots run in PlayerCamera's CameraBone sub-mode, which other scripted
+// shots share, so the conversation itself is hooked instead of the camera.
+// Supported build: every conversation type (ConversationGraph, Tier2, Briefing)
+// picks its camera shots through ConversationGraphNode_CameraTrack's execute
+// (0x6c7d70), which calls 0x6bddb0 (thiscall track, flag; track 0xffff clears
+// it) on a conversation participant. A participant's +8 is its conversation;
+// participants leave through 0x6bed40 and 0x6bf3e0, which both skip unless +0x50
+// (entered) is set. Overheard conversations never pick camera tracks.
+bool fixedDialogueCamera{};
+std::atomic<void*> conversationCamera{}; // conversation that last picked a camera track
+CameraMath::Matrix lastPlayerBase;uint64_t lastPlayerBaseTick{},dialogueEndTick{};
+bool dialogueCamera{},holdingPlayerBase{};
+void NoteConversation(const char* event,void* conversation) {
+    FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")){fprintf(f,"conversation %s %p\n",event,conversation);fclose(f);}
+}
+using ConversationTrack=void(__thiscall*)(void*,uint32_t,uint32_t);
+using ConversationExit=void(__thiscall*)(void*);
+ConversationTrack originalConversationTrack{};
+ConversationExit originalConversationExit[2]{};
+void __fastcall ConversationTrackHook(void* self,void*,uint32_t track,uint32_t flag) {
+    originalConversationTrack(self,track,flag);
+    auto conversation=*reinterpret_cast<void**>(static_cast<unsigned char*>(self)+8);
+    if((track&0xffff)!=0xffff) {
+        if(conversationCamera.exchange(conversation)!=conversation)NoteConversation("camera",conversation);
+    } else {
+        void* expected=conversation;
+        if(conversationCamera.compare_exchange_strong(expected,nullptr))NoteConversation("cameraCleared",conversation);
+    }
+}
+void ConversationLeave(void* self) {
+    auto p=static_cast<unsigned char*>(self);
+    if(!p || !p[0x50])return;
+    void* expected=*reinterpret_cast<void**>(p+8);
+    if(expected && conversationCamera.compare_exchange_strong(expected,nullptr))NoteConversation("exit",expected);
+}
+void __fastcall ConversationExitHook0(void* self,void*){ConversationLeave(self);originalConversationExit[0](self);}
+void __fastcall ConversationExitHook1(void* self,void*){ConversationLeave(self);originalConversationExit[1](self);}
 bool experimentalMotionControls{};
 bool motionControls=true;
 bool controllerHideArms=true;
@@ -537,13 +580,18 @@ uintptr_t __cdecl AttachmentHook(void* source,void* instance,int bone,CameraMath
 void __fastcall BoundsHook(void* self,void*,void* volume) {
     originalBounds(self,volume);
     if(!experimentalMotionControls || !volume || *reinterpret_cast<uintptr_t*>(self)!=base+0xaaf854-0x400000)return;
-    auto pose=ReadWeaponPose();
-    if(pose.active && *reinterpret_cast<void**>(static_cast<unsigned char*>(self)+8)==pose.instance) {
-        // Cell lookup (0x5c8950) has no callback for type 10 (Everything):
-        // forcing it here caused an indirect call through zero while loading.
-        // Enlarge only finite bounds, preserving their native world centre.
-        if(NativeBounds::ExpandWeapon(volume,4.f*worldScale))++controllerBounds;
-    }
+    // Cell lookup (0x5c8950) has no callback for type 10 (Everything):
+    // forcing it here caused an indirect call through zero while loading.
+    // Enlarge only finite bounds, preserving their native centre: the volume is
+    // relative to the instance (0x60b330, vtable slot 11, returns a sphere at
+    // its origin), so a world-space centre would misplace it.
+    //
+    // Local patch (pistol culling): enlarge every gun, not only while the
+    // controller pose is active. A weapon equipped while the level loads (the
+    // pistol) has its volume taken before the pose is active; it kept the
+    // native size and vanished once the hand left the view around the game
+    // camera's own heading.
+    if(NativeBounds::ExpandWeapon(volume,4.f*worldScale))++controllerBounds;
 }
 uintptr_t __fastcall WeaponMuzzleHook(void* self,void*,CameraMath::Matrix* out,int barrel,bool firstPerson) {
     auto result=NativeWeaponMuzzle(self,out,barrel,firstPerson);
@@ -573,6 +621,13 @@ CameraMath::Matrix* __fastcall WeaponAimHook(void* self,void*,CameraMath::Matrix
     return result;
 }
 void __fastcall ActorDrawHook(void* self,void*,void* matrix,void* args) {
+    if(fixedDialogueCamera) {
+        // Held at Jensen's eyes in a conversation: his own head and body would
+        // fill the view. current.playerInstance is PlayerCamera's Instance.
+        std::lock_guard lock(stateMutex);
+        if(holdingPlayerBase && current.active && current.playerInstance &&
+           *reinterpret_cast<void**>(static_cast<unsigned char*>(self)+8)==current.playerInstance)return;
+    }
     if(experimentalMotionControls && controllerHideArms) {
         auto pose=ReadWeaponPose();
         // Suppress only the equipped weapon owner's actor mesh in tracked
@@ -810,6 +865,13 @@ void __fastcall UpdateHook(void* self,void*) {
                 fprintf(f,"interactionScreen=%d requested=%d frame=%llu\n",screen,requested,frameId.load());fclose(f);
             }
         }
+        const bool dialogue=conversationCamera.load()!=nullptr;
+        if(dialogue!=dialogueCamera) {
+            dialogueCamera=dialogue;if(!dialogue)dialogueEndTick=now;
+            FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")) {
+                fprintf(f,"dialogueCamera=%d frame=%llu\n",dialogue,frameId.load());fclose(f);
+            }
+        }
         Transport::Tracking t{};
         RefreshScreenMode();
         if(requested && !screenReasons && active && trackingReader.Read(channel,t,GetTickCount64())) {
@@ -850,6 +912,22 @@ void __fastcall UpdateHook(void* self,void*) {
                     renderBase.m[8]=x;renderBase.m[9]=y;renderBase.m[10]=0;
                 }
                 if(bobTrace)BobTrace(ms,current.originalWorld,renderBase.m+12,t);
+                if(fixedDialogueCamera) {
+                    const bool held=holdingPlayerBase;
+                    // Hold only straight out of gameplay, never a pose from before a load.
+                    if(dialogueCamera && now-lastPlayerBaseTick<1000)holdingPlayerBase=true;
+                    // Afterwards, keep holding until the game camera is back at the held
+                    // pose (at most 2 s), so its blend back from the last shot is not shown.
+                    if(holdingPlayerBase && !dialogueCamera) {
+                        float d=std::hypot(renderBase.m[12]-lastPlayerBase.m[12],renderBase.m[13]-lastPlayerBase.m[13],renderBase.m[14]-lastPlayerBase.m[14]);
+                        if(d<.1f*worldScale || now-dialogueEndTick>2000)holdingPlayerBase=false;
+                    }
+                    if(holdingPlayerBase)renderBase=lastPlayerBase;
+                    else {lastPlayerBase=renderBase;lastPlayerBaseTick=now;}
+                    if(held!=holdingPlayerBase) {
+                        FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")){fprintf(f,"dialogueHold=%d frame=%llu\n",holdingPlayerBase,frameId.load());fclose(f);}
+                    }
+                }
             }
             if(experimentalMotionControls && t.rightController.valid && active==manager+0x6f0) {
                 auto entity=*reinterpret_cast<void**>(active+0xaa0);
@@ -1239,6 +1317,22 @@ void Install() {
     levelRecenter=GetPrivateProfileIntW(L"VR",L"LevelRecenter",1,config)!=0;
     levelMenu=GetPrivateProfileIntW(L"VR",L"LevelMenu",1,config)!=0;
     yawOnlyCamera=GetPrivateProfileIntW(L"VR",L"YawOnlyCamera",0,config)!=0;
+    fixedDialogueCamera=GetPrivateProfileIntW(L"VR",L"FixedDialogueCamera",0,config)!=0;
+    if(enabled && fixedDialogueCamera) {
+        // Hooked on their own, like the screen hooks: a mismatch or failure only
+        // turns this option off and never affects the camera hooks.
+        const Hook conversation[]={
+            {0x6bddb0,(void*)&ConversationTrackHook,(void**)&originalConversationTrack,"\x66\x8b\x44\x24\x04\xba\xff\xff\x00\x00",10},
+            {0x6bed40,(void*)&ConversationExitHook0,(void**)&originalConversationExit[0],"\x83\xec\x08\x56\x8b\xf1\x80\x7e\x50\x00",10},
+            {0x6bf3e0,(void*)&ConversationExitHook1,(void**)&originalConversationExit[1],"\x55\x8b\xec\x83\xe4\xf0\x83\xec\x74\x53\x56\x8b\xf1\x80\x7e\x50\x00",17}};
+        bool ok=true;
+        for(auto& h:conversation)if(memcmp((void*)VA(h.address),h.bytes,h.length))ok=false;
+        int created=0;
+        if(ok)for(auto& h:conversation){if(MH_CreateHook((void*)VA(h.address),h.hook,h.original)!=MH_OK){ok=false;break;}++created;}
+        if(ok)for(auto& h:conversation)if(MH_EnableHook((void*)VA(h.address))!=MH_OK)ok=false;
+        if(!ok){for(int i=0;i<created;i++){MH_DisableHook((void*)VA(conversation[i].address));MH_RemoveHook((void*)VA(conversation[i].address));}fixedDialogueCamera=false;}
+        FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")){fprintf(f,"conversation hooks: %s\n",ok?"hooked":"skipped");fclose(f);}
+    }
     bobTrace=GetPrivateProfileIntW(L"VR",L"BobTrace",0,config)!=0;
     // Optional stutter fix from HRDCfix (github.com/imring/HRDCfix, MIT).
     // 0x54c800 spin-waits on Sleep(1) while a busy flag is set. The game never
@@ -1342,7 +1436,7 @@ void Install() {
         }
     }
     FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")) {
-        fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d levelMenu=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g sideSwayHold=%d sleepFix=%d F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,levelMenu,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0],swayHold.windowMs,int(sleepFix));fclose(f);
+        fprintf(f,"Camera hooks base=%p enabled=%d unitsPerMetre=%g lockVerticalCamera=%d levelRecenter=%d levelMenu=%d yawOnlyCamera=%d stanceHold=%d/%g/%g yawMs=%d/%d yawLimit=%g sideSwayHold=%d sleepFix=%d fixedDialogueCamera=%d F6=toggle F9=recenter\n",reinterpret_cast<void*>(base),enabled,worldScale,lockVerticalCamera,levelRecenter,levelMenu,yawOnlyCamera,stanceHold.enabled,stanceHold.trigger,stanceHold.rate,yawSwing.a.windowMs[0],yawSwing.b.windowMs[0],yawSwing.a.limit[0],swayHold.windowMs,int(sleepFix),int(fixedDialogueCamera));fclose(f);
     }
 }
 }
@@ -1442,7 +1536,7 @@ Transport::RenderInfo OnPresent(uint64_t frame,bool capture) {
         FILE* f{};if(!fopen_s(&f,"DeusExHRVR-effects.log","a")){fprintf(f,"lumaSubstitute=%d frame=%llu\n",on,frame);fclose(f);}
     }f12Down=f12;
     if(f6&&!f6Down){requested=!requested;referenceValid=false;current.active=false;}
-    if(f9&&!f9Down)recenterRequested=true;
+    if(f9&&!f9Down){recenterRequested=true;conversationCamera=nullptr;} // F9 also releases a stuck conversation hold
     if((f6&&!f6Down)||(f9&&!f9Down)) {
         FILE* f{};if(!fopen_s(&f,"DeusExHRVR-camera.log","a")){fprintf(f,"tracking requested=%d recenter=%d frame=%llu\n",requested,recenterRequested,frame);fclose(f);}
     }
